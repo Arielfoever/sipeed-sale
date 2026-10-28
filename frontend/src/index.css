@@ -1,0 +1,60 @@
+:root {
+  color-scheme: light;
+  font-family:
+    "Inter",
+    "PingFang SC",
+    "Microsoft YaHei",
+    system-ui,
+    sans-serif;
+  line-height: 1.5;
+  background:
+    radial-gradient(at 20% 0%, rgba(56, 132, 255, 0.16), transparent 50%) no-repeat,
+    #f6f7fb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+#root {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+}
+
+.page .banner {
+  margin-bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.product-card {
+  width: 300px;
+}
+
+.product-card .card-image,
+.product-card .card-image-placeholder {
+  object-fit: cover;
+  height: 140px;
+}
+
+.product-card .card-image-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  font-weight: 700;
+  color: #9fb6dd;
+  background: linear-gradient(135deg, #eef3fc, #dfe8f8);
+}
+
+.product-card .card-price {
+  margin: 8px 0 0;
+}

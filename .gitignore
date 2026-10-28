@@ -1,0 +1,16 @@
+# Go 构建产物
+backend/bin/
+backend/sale-sipeed-api
+
+# 环境变量(仅提交 .env.example 样例;真实凭据不入库)
+.env
+.env.*
+!.env.example
+
+# 测试
+coverage.out
+coverage.html
+
+# 杂项
+.DS_Store
+tmp/

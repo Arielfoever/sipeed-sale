@@ -1,0 +1,180 @@
+openapi: "3.0.3"
+info:
+  title: SaleSipeed Presale API
+  version: 0.1.0
+  description: |
+    硬件预售站点 API —— 单一事实源(single source of truth)。
+
+    - 前端:由本文件生成 TypeScript 类型 + 类型化 fetch 客户端(openapi-typescript + openapi-fetch)。
+    - 后端:第 2 步起由本文件生成 Go 类型与路由 stub,并与 swagger 文档保持同步。
+
+    金额约定:money 一律为最小货币单位(分)的 int64 整数。
+    幂等约定:POST /orders 携带 X-Request-Id,Stripe 侧幂等由第 3 步的
+    条件更新保证,后端不会重复创建订单。
+servers:
+  - url: "{scheme}://{host}{port}/api"
+    variables:
+      scheme:
+        default: http
+        enum: [http, https]
+      host:
+        default: localhost
+      port:
+        default: "8080"
+tags:
+  - name: products
+    description: 商品浏览(预售)
+  - name: orders
+    description: 下单(第 3 步起将以 Checkout Session 控制跳转)
+paths:
+  /products:
+    get:
+      operationId: listProducts
+      summary: 预售商品列表
+      tags: [products]
+      responses:
+        "200":
+          description: 商品列表(可能为空)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Product"
+        "500":
+          description: 服务端错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-notes: >-
+        所有 ID 一律为 UUIDv7(时间戳有序):product.id / order.id 均为
+        UIDv7 字符串,不是自增整数。
+  /orders:
+    post:
+      operationId: createOrder
+      summary: 创建预售订单
+      description: |
+        仅提交 product_id + quantity,金额由服务端按商品价格表计算,前端
+        传来的价格字段一律忽略。响应包含订单 id、初始状态与总额;
+        状态推进(PENDING -> PAID)只由 Stripe webhook 触发,浏览器回跳
+        不改变状态。
+      tags: [orders]
+      parameters:
+        - name: X-Request-Id
+          in: header
+          required: false
+          description: 客户端随机生成的请求 ID(UUIDv7),用于幂等去重与链路追踪
+          schema:
+            type: string
+            format: uuid
+            description: UUIDv7
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderPayload"
+      responses:
+        "201":
+          description: 订单已创建(状态 PENDING)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateOrderResponse"
+        "400":
+          description: 请求体非法(product_id/quantity 非正整数等)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 商品不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 库存不足以覆盖本次购买数量
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: 服务端错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+components:
+  schemas:
+    Product:
+      type: object
+      required: [id, name, description, price, currency, stock]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: 商品 ID,UUIDv7(时间戳有序)
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          type: integer
+          format: int64
+          description: 单价,最小货币单位(分)的整数
+          minimum: 0
+        currency:
+          type: string
+          description: ISO 4217 三字母货币代码(如 CNY)
+          minLength: 3
+          maxLength: 3
+        stock:
+          type: integer
+          format: int64
+          description: 可售库存,<= 0 表示暂不可下单
+        image_url:
+          type: string
+          description: 可选商品图
+    CreateOrderPayload:
+      type: object
+      required: [product_id, quantity]
+      additionalProperties: false
+      description: 下单只提交商品与数量,不包含任何金额字段
+      properties:
+        product_id:
+          type: string
+          format: uuid
+          description: 商品 ID(UUIDv7)
+        quantity:
+          type: integer
+          format: int64
+          minimum: 1
+    CreateOrderResponse:
+      type: object
+      required: [id, status, total_price, currency]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: 订单号,UUIDv7(时间戳有序,同时充当幂等主键关联字段)
+        status:
+          type: string
+          description: 订单状态(PENDING/PAID/CANCELED/REFUNDED,由后端推进)
+        total_price:
+          type: integer
+          format: int64
+          description: 服务端计算的总价,最小货币单位(分)
+          minimum: 0
+        currency:
+          type: string
+          minLength: 3
+          maxLength: 3
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: 人类可读的错误描述

@@ -1,0 +1,32 @@
+{
+  "name": "sale-sipeed-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:mock": "vite --mode mock",
+    "gen:api": "openapi-typescript ../openapi.yaml -o src/schema.d.ts",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "antd": "^6.6.8",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "uuid": "^14.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^6.1.2",
+    "openapi-fetch": "^0.14.1",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^5.6.3",
+    "vite": "^8.3.5"
+  },
+  "allowScripts": {
+    "esbuild@0.21.5": true
+  }
+}
