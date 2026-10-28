@@ -87,7 +87,7 @@ export interface components {
              * @description 订单号,UUIDv7(时间戳有序,同时充当幂等主键关联字段)
              */
             id: string;
-            /** @description 订单状态(PENDING/PAID/CANCELED/REFUNDED,由后端推进) */
+            /** @description 订单状态(PENDING/PAID/FAILED/CANCELED/REFUNDED,由后端推进) */
             status: string;
             /**
              * Format: int64
@@ -95,6 +95,13 @@ export interface components {
              */
             total_price: number;
             currency: string;
+            /**
+             * Format: uri
+             * @description Stripe Checkout 付款页地址(由后端创建 Checkout Session 后返回)。
+             *     前端应引导浏览器跳转到该地址完成支付;浏览器跳回 success/cancel
+             *     页面仅用于展示,订单真实状态以 webhook 推进为准。
+             */
+            checkout_url: string;
         };
         Error: {
             /** @description 人类可读的错误描述 */

@@ -22,12 +22,16 @@ type CreateOrderPayload struct {
 
 // CreateOrderResponse defines model for CreateOrderResponse.
 type CreateOrderResponse struct {
-	Currency string `json:"currency"`
+	// CheckoutUrl Stripe Checkout 付款页地址(由后端创建 Checkout Session 后返回)。
+	// 前端应引导浏览器跳转到该地址完成支付;浏览器跳回 success/cancel
+	// 页面仅用于展示,订单真实状态以 webhook 推进为准。
+	CheckoutUrl string `json:"checkout_url"`
+	Currency    string `json:"currency"`
 
 	// Id 订单号,UUIDv7(时间戳有序,同时充当幂等主键关联字段)
 	Id openapi_types.UUID `json:"id"`
 
-	// Status 订单状态(PENDING/PAID/CANCELED/REFUNDED,由后端推进)
+	// Status 订单状态(PENDING/PAID/FAILED/CANCELED/REFUNDED,由后端推进)
 	Status string `json:"status"`
 
 	// TotalPrice 服务端计算的总价,最小货币单位(分)

@@ -45,6 +45,26 @@ export function App(): ReactElement {
   const [pending, setPending] = useState<PendingMap>({});
   const [orderErrors, setOrderErrors] = useState<OrderErrorMap>({});
   const [orderResults, setOrderResults] = useState<OrderResultMap>({});
+  // 浏览器从 Stripe 回跳(仅展示,订单状态以 webhook 为准,见第 4 步)
+  const [returnBanner, setReturnBanner] = useState<string | null>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("status");
+    const orderId = params.get("order_id");
+    if (status === "success" && orderId) {
+      return `订单 ${orderId}:Stripe 已接受付款,订单状态以后端 webhook 确认为准。`;
+    }
+    if (status === "cancel" && orderId) {
+      return `订单 ${orderId}:你取消了支付,订单仍是 PENDING,可重新下单。`;
+    }
+    return null;
+  });
+
+  // 清理回跳参数,避免刷新时重复提示
+  useEffect(() => {
+    if (returnBanner) {
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  }, [returnBanner]);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,6 +117,10 @@ export function App(): ReactElement {
           quantity,
         });
         setOrderResults((prev) => ({ ...prev, [product.id]: order }));
+        // 第 3 步约定:拿到后端返回的 Checkout URL 后跳转 Stripe 付款页
+        if (order.checkout_url) {
+          window.location.assign(order.checkout_url);
+        }
       } catch (err) {
         const status = err instanceof ApiError ? err.status : undefined;
         const message =
@@ -183,6 +207,17 @@ export function App(): ReactElement {
             选择商品与数量,点击「下单」即提交预售订单(价格以后端计算为准)。
           </Typography.Text>
         </header>
+        {returnBanner ? (
+          <Alert
+            type={returnBanner.includes("已接受付款") ? "success" : "info"}
+            showIcon
+            message="Stripe 返回结果(仅展示)"
+            description={returnBanner}
+            closable
+            onClose={() => setReturnBanner(null)}
+            style={{ marginBottom: 16 }}
+          />
+        ) : null}
         {body}
       </main>
     </ConfigProvider>

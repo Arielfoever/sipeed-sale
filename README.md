@@ -149,6 +149,23 @@ npm run build   # tsc 类型检查 + vite build,产物在 frontend/dist/
 5. **订单状态以 webhook 为准**:浏览器跳回 success 页只用于展示,不改
    订单状态(第 4 步实现)。
 
+### 第 3 步验收(Stripe Checkout 跳转)
+
+在 `backend/.env` 填入沙箱密钥后 `make run`:
+
+```bash
+curl -s -X POST localhost:8080/api/orders \
+  -H 'Content-Type: application/json' \
+  -H "X-Request-Id: $(uuidgen | tr 'A-Z' 'a-z')" \
+  -d '{"product_id":"01a181d1-d53a-7428-811c-e53c0548c643","quantity":1}' | jq
+# → {...,"status":"PENDING","total_price":21900,
+#     "checkout_url":"https://checkout.stripe.com/c/pay/..."}
+```
+
+前端页面真实模式下点「下单」会自动跳转到 Stripe 沙箱付款页;沙箱用测试卡
+`4242 4242 4242 4242`(任意未来日期/CVC)支付后浏览器跳回 `?status=success`
+(该回跳**仅展示**,订单状态由第 4 步 webhook 推进)。
+
 ## 路线图
 
 | 步骤 | 内容 | tag |

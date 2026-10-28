@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"sale-sipeed/backend/internal/payments"
+
 	gen "sale-sipeed/backend/internal/api/gen"
 	"sale-sipeed/backend/internal/store"
 )
@@ -14,7 +16,7 @@ import (
 //
 // 前端 dev(vite proxy)与生产(nginx)都把 /api 前缀原样转发到这里,
 // 因此路由统一挂在 /api 下,不做路径改写。
-func NewServer(st *store.Store, log *slog.Logger) http.Handler {
+func NewServer(st *store.Store, pays *payments.Client, base string, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 
 	// 探活(不在 OpenAPI 规范内,运维用途)
@@ -25,5 +27,5 @@ func NewServer(st *store.Store, log *slog.Logger) http.Handler {
 	})
 
 	// swagger 生成的 API 路由,挂载在 /api base 下
-	return gen.HandlerFromMuxWithBaseURL(NewHandler(st, log), mux, "/api")
+	return gen.HandlerFromMuxWithBaseURL(NewHandler(st, pays, base, log), mux, "/api")
 }

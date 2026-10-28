@@ -20,16 +20,18 @@ var (
 
 // Order 对应数据库 orders 表。
 type Order struct {
-	ID         uuid.UUID // 订单号(UUIDv7,应用层生成)
-	ProductID  uuid.UUID
-	Quantity   int64
-	UnitPrice  int64 // 分
-	TotalPrice int64 // 分
-	Currency   string
-	Status     string // PENDING / PAID / CANCELED / REFUNDED
-	RequestID  *uuid.UUID
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	ID               uuid.UUID // 订单号(UUIDv7,应用层生成)
+	ProductID        uuid.UUID
+	Quantity         int64
+	UnitPrice        int64 // 分
+	TotalPrice       int64 // 分
+	Currency         string
+	Status           string // PENDING / PAID / FAILED / CANCELED / REFUNDED
+	RequestID        *uuid.UUID
+	StripeSessionID  *string // Checkout Session(第 3 步)
+	StripeSessionURL *string // Checkout 付款页 URL(session 仅创建时返回一次)
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // CreateOrderInput 下单入参。
@@ -184,17 +186,40 @@ func (s *Store) getOrderByRequestID(
 
 const orderColumnsSQL = `
 	SELECT id, product_id, quantity, unit_price, total_price, currency, status,
-	       request_id, created_at, updated_at
+	       request_id, stripe_session_id, stripe_session_url, created_at, updated_at
 `
 
 func scanOrderRow(rows pgxRow) (Order, error) {
 	var o Order
 	err := rows.Scan(
 		&o.ID, &o.ProductID, &o.Quantity, &o.UnitPrice, &o.TotalPrice,
-		&o.Currency, &o.Status, &o.RequestID, &o.CreatedAt, &o.UpdatedAt,
+		&o.Currency, &o.Status, &o.RequestID, &o.StripeSessionID,
+		&o.StripeSessionURL, &o.CreatedAt, &o.UpdatedAt,
 	)
 	if err != nil {
 		return Order{}, err
 	}
 	return o, nil
+}
+
+// AttachStripeSession 把（一次性创建的）Stripe Checkout Session 绑定到
+// PENDING 订单上;(session id / url 存库,重复 CREATE 直接复用,幂等)
+func (s *Store) AttachStripeSession(
+	ctx context.Context,
+	orderID uuid.UUID,
+	sessionID string,
+	sessionURL string,
+) error {
+	cmd, err := s.pool.Exec(ctx, `
+		UPDATE orders
+		SET stripe_session_id = $2, stripe_session_url = $3, updated_at = now()
+		WHERE id = $1 AND status = 'PENDING'
+	`, orderID, sessionID, sessionURL)
+	if err != nil {
+		return err
+	}
+	if cmd.RowsAffected() != 1 {
+		return ErrOrderNotFound
+	}
+	return nil
 }

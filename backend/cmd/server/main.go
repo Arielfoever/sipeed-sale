@@ -13,6 +13,7 @@ import (
 
 	"sale-sipeed/backend/internal/api"
 	"sale-sipeed/backend/internal/config"
+	"sale-sipeed/backend/internal/payments"
 	"sale-sipeed/backend/internal/store"
 )
 
@@ -30,9 +31,14 @@ func main() {
 	defer st.Close()
 	log.Info("database ready")
 
+	if cfg.StripeAPIKey == "" {
+		log.Warn("STRIPE_API_KEY 未配置,下单后无法创建支付链接")
+	}
+	pays := payments.New(cfg.StripeAPIKey)
+
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           api.NewServer(st, log),
+		Handler:           api.NewServer(st, pays, cfg.PublicBaseURL, log),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
