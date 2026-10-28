@@ -1,0 +1,22 @@
+# 开发/联调用:只起一个 PostgreSQL(生产使用服务器上的数据库,不用此文件)。
+# 后端与前端仍直接跑在本机(docker compose 主要功能在附加项实现)。
+services:
+  postgres:
+    image: library/postgres:17
+    container_name: sale-sipeed-postgres
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: sale_sipeed
+      POSTGRES_PASSWORD: sale_sipeed
+      POSTGRES_DB: sale_sipeed
+    volumes:
+      - sale_sipeed_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sale_sipeed -d sale_sipeed"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  sale_sipeed_pgdata:

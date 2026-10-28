@@ -1,0 +1,12 @@
+# oapi-codegen 配置:由仓库根 openapi.yaml 生成 Go 代码。
+# API 一律以 swagger 生成:类型与 HTTP 接口路由均来自 spec,handler 实现
+# 生成的 ServerInterface,任何契约变更都会在编译期暴露。
+package: api
+generate:
+  models: true
+  std-http-server: true
+output: internal/api/gen/oapi.gen.go
+output-options:
+  # 类型绑定:uuid -> openapi_types.UUID(nil 检查比 string 更安全),
+  # 保持与 runtime 包一致
+  skip-prune: false

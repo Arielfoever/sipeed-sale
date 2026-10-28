@@ -6,16 +6,64 @@
 - **后端**:Go + PostgreSQL(后续步骤,`backend/`)
 - **支付**:Stripe Checkout + Webhook(第 3、4 步)
 
-## 当前进度:第 1 步 —— 前端商品页(已实现)
+## 当前进度:第 2 步 —— Go 后端(已实现)
 
-商品数据通过 `GET /api/products` 从后端获取并渲染;点击「下单」会携带随机
-请求 ID(`X-Request-Id`,用于防重复点击/幂等排查)向后端发起
-`POST /api/orders`(body 仅含 `product_id + quantity`,金额由后端计算,
-前端不提交任何金额字段)。
+前端(`frontend/`)负责商品展示与下单;后端(`backend/`,第 2 步)已实现:
 
-**此阶段后端尚未实现**,使用 `npm run dev:mock` 可在 dev server 内模拟
-全部接口;也可以不开启 mock,请求将得到 404 / 连接拒绝,页面会以提示形式
-呈现(均为预期行为)。
+- `GET /api/products` 商品列表(pgx + 手写 SQL,SQL 全部集中在
+  `backend/internal/store` 单包,便于未来迁移)
+- `POST /api/orders` 下单:服务端按商品表价格计算总额(分)、事务 +
+  `SELECT FOR UPDATE` 扣库存、订单号 UUIDv7(`google/uuid` v7)、
+  `X-Request-Id` 幂等去重(`request_id` 唯一索引,重复提交复用既有订单)
+- 数据库迁移:`golang-migrate` + `iofs` 内嵌迁移 SQL(`backend/internal/
+  store/migrations/`),启动自动执行(`MIGRATIONS_AUTO=true`,生产可关闭)
+- API 服务端代码由 swagger 生成:`openapi.yaml` 经 `oapi-codegen` 生成类型
+  与路由,handler 实现该生成接口(契约编译期对齐)
+
+### 后端运行(首次)
+
+```bash
+# 1. 起 PostgreSQL(仅本机测试;生产用服务器上的 PG,连接串见 .env.example)
+docker compose -f docker-compose.dev.yml up -d
+
+# 2. 后端配置(按需修改 DATABASE_URL / SERVER_PORT 等)
+cd backend && cp .env.example .env
+
+# 3. 生成 swagger 服务端代码并启动
+make gen
+make run
+```
+
+`make run` 自动执行迁移并监听 `:8080`;`curl -s localhost:8080/healthz`。
+
+### 验收(第 2 步:curl 落库返回订单号)
+
+```bash
+curl -s localhost:8080/api/products | jq
+
+curl -s -X POST localhost:8080/api/orders \
+  -H 'Content-Type: application/json' \
+  -H "X-Request-Id: $(uuidgen | tr 'A-Z' 'a-z')" \
+  -d '{"product_id":"01a181d1-d53a-7428-811c-e53c0548c643","quantity":2}' | jq
+# → {"currency":"CNY","id":"<uuidv7>","status":"PENDING","total_price":43800}
+
+# 同一 X-Request-Id 重复提交 → 返回同一订单(id/total 不变,不重复扣库存)
+```
+
+订单与库存可在 PG 中核对(`orders` / `products` 表)。
+
+### 前端运行
+
+```bash
+cd frontend
+npm install
+npm run gen:api     # 由根 openapi.yaml 重新生成 TS 客户端类型
+npm run dev         # 真实模式:/api 代理到 http://localhost:8080(Go 后端)
+npm run dev:mock    # Mock 模式(后端未就绪时联调前端)
+```
+
+打开 http://localhost:5173 即可看到商品页;真实模式下下单结果与后端数据库
+一致(mock 模式下为模拟数据,响应结构同源)。
 
 ### API 均由 Swagger/OpenAPI 生成
 
@@ -25,15 +73,17 @@
 ```
 openapi.yaml
    ├── frontend:`npm run gen:api` → src/schema.d.ts → openapi-fetch 类型化客户端
-   └── backend(WIP,第 2 步):由同一规范生成 Go 类型与路由 stub
+   └── backend:`backend/Makefile gen`(oapi-codegen)→ 类型 + 路由(挂 /api)
 ```
 
 - 前端的类型(`schema.d.ts`)+ 请求执行(`openapi-fetch`)均由 spec 生成,
   请求路径/方法/请求体/响应体在编译期即受约束,不会与后端契约漂移;
-- spec 变更后运行 `npm run gen:api` 重新生成;生成文件与源码一同提交,
-  CI 中会校验生成物是否与 spec 同步(附加项实现);
-- 金额为分、只传 `product_id + quantity`、`X-Request-Id` 幂等头等约定
-  都已写入 spec 的字段描述与说明中。
+- 后端 `gen.ServerInterface` 由同一 spec 生成,handler 必须实现它——
+  spec 契约变化会在编译期暴露;
+- spec 变更后:前端 `npm run gen:api`、后端 `make gen` 重新生成;生成
+  文件与源码一同提交,CI 中会校验生成物是否与 spec 同步(附加项实现);
+- 金额为分、UUIDv7 ID、`X-Request-Id` 幂等头等约定都已写入 spec 的字段
+  描述与说明中。
 
 ### 运行
 
@@ -48,7 +98,7 @@ npm run dev:mock   # Mock 模式:dev server 内直接模拟 /api,无需后端
 
 ### 如何使用Mock
 
-后端尚未实现或想独立联调前端时,使用 **Mock 模式**:
+后端未启动或想独立联调前端时,使用 **Mock 模式**:
 
 ```bash
 cd frontend
@@ -103,8 +153,8 @@ npm run build   # tsc 类型检查 + vite build,产物在 frontend/dist/
 
 | 步骤 | 内容 | tag |
 | --- | --- | --- |
-| 1 | 前端商品页 + 下单按钮(mock/404) | `step1-frontend` |
-| 2 | Go 后端:下单接口、订单存储、价格计算、pgx + golang-migrate | `step2-orders` |
+| 1 | 前端商品页 + 下单按钮(mock/404) | `step1-frontend` ✅ |
+| 2 | Go 后端:下单接口、订单存储、价格计算、pgx 手写 SQL 单包、golang-migrate、oapi-codegen(swagger) | `step2-orders` |
 | 3 | Stripe Checkout 跳转付款(沙箱) | `step3-stripe` |
 | 4 | Webhook 回调确认订单 | `step4-webhook` |
 | 附加 | 退款、docker compose、nginx 部署、CI | — |

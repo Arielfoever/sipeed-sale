@@ -1,0 +1,5 @@
+DELETE FROM products WHERE id IN (
+  '01a181d1-d53a-7428-811c-e53c0548c643',
+  '01a181d1-d541-7878-b7c5-9e91dd9a6c50',
+  '01a181d1-d541-76f3-939f-5b3eac92c10f'
+);

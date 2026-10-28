@@ -161,8 +161,8 @@ export function mockApiPlugin(): Plugin {
               {
                 // 订单号 = UUIDv7(时间戳有序),与真实后端一致
                 id: uuidV7(),
-                // 与真实后端一致的初始状态;第 3 步后将以 webhook 推进为 paid
-                status: "pending",
+                // 与真实后端一致的初始状态;第 4 步 webhook 推进为 PAID
+                status: "PENDING",
                 // 金额由"服务端"(此处为 mock)计算,前端无从插手
                 total_price: product.price * quantity,
                 currency: product.currency,
