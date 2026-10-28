@@ -72,10 +72,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/orders/{order_id}/refund": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 退款订单(仅 PAID 可退)
+         * @description 通过 Stripe Refund(按已记录的 PaymentIntent,全额退款)把 PAID 订单
+         *     推进为 REFUNDED。条件更新幂等:重复调用命中 0 行则直接返回当前订单。
+         *
+         *     注意:示例系统未内置管理员鉴权,生产部署时必须为该端点增加鉴权
+         *     (网关 ACL / JWT 角色校验)后使用。
+         */
+        post: operations["refundOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description 订单的对外可见视图(退款端点等仅需要读取时) */
+        OrderView: {
+            /**
+             * Format: uuid
+             * @description 订单号(UUIDv7)
+             */
+            id: string;
+            /** @description 订单状态(PENDING/PAID/FAILED/CANCELED/REFUNDED) */
+            status: string;
+            /**
+             * Format: int64
+             * @description 最小货币单位(分)
+             */
+            total_price: number;
+            currency: string;
+        };
         Product: {
             /**
              * Format: uuid
@@ -270,6 +310,68 @@ export interface operations {
             };
             /** @description 服务端错误 */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    refundOrder: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 客户端随机生成的请求 ID(UUIDv7),用于幂等去重与链路追踪 */
+                "X-Request-Id"?: string;
+            };
+            path: {
+                /** @description 订单号(UUIDv7) */
+                order_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 退款完成(或已是 REFUNDED,幂等成功) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderView"];
+                };
+            };
+            /** @description 请求参数不合法 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 订单不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 当前状态不可退款(仅 PAID 可退) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Stripe 退款调用失败 */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

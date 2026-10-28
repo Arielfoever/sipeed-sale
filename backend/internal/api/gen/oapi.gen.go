@@ -44,6 +44,20 @@ type Error struct {
 	Error string `json:"error"`
 }
 
+// OrderView 订单的对外可见视图(退款端点等仅需要读取时)
+type OrderView struct {
+	Currency string `json:"currency"`
+
+	// Id 订单号(UUIDv7)
+	Id openapi_types.UUID `json:"id"`
+
+	// Status 订单状态(PENDING/PAID/FAILED/CANCELED/REFUNDED)
+	Status string `json:"status"`
+
+	// TotalPrice 最小货币单位(分)
+	TotalPrice int64 `json:"total_price"`
+}
+
 // Product defines model for Product.
 type Product struct {
 	// Currency ISO 4217 三字母货币代码(如 CNY)
@@ -70,6 +84,12 @@ type CreateOrderParams struct {
 	XRequestId *openapi_types.UUID `json:"X-Request-Id,omitempty"`
 }
 
+// RefundOrderParams defines parameters for RefundOrder.
+type RefundOrderParams struct {
+	// XRequestId 客户端随机生成的请求 ID(UUIDv7),用于幂等去重与链路追踪
+	XRequestId *openapi_types.UUID `json:"X-Request-Id,omitempty"`
+}
+
 // StripeWebhookParams defines parameters for StripeWebhook.
 type StripeWebhookParams struct {
 	// StripeSignature Stripe 签名头(t=...,v1=...)
@@ -84,6 +104,9 @@ type ServerInterface interface {
 	// 创建预售订单
 	// (POST /orders)
 	CreateOrder(w http.ResponseWriter, r *http.Request, params CreateOrderParams)
+	// 退款订单(仅 PAID 可退)
+	// (POST /orders/{order_id}/refund)
+	RefundOrder(w http.ResponseWriter, r *http.Request, orderId openapi_types.UUID, params RefundOrderParams)
 	// 预售商品列表
 	// (GET /products)
 	ListProducts(w http.ResponseWriter, r *http.Request)
@@ -132,6 +155,55 @@ func (siw *ServerInterfaceWrapper) CreateOrder(w http.ResponseWriter, r *http.Re
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CreateOrder(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RefundOrder operation middleware
+func (siw *ServerInterfaceWrapper) RefundOrder(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "order_id" -------------
+	var orderId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "order_id", r.PathValue("order_id"), &orderId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "order_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RefundOrderParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "X-Request-Id" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Request-Id")]; found {
+		var XRequestId openapi_types.UUID
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Request-Id", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", valueList[0], &XRequestId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Request-Id", Err: err})
+			return
+		}
+
+		params.XRequestId = &XRequestId
+
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RefundOrder(w, r, orderId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -320,6 +392,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	}
 
 	m.HandleFunc("POST "+options.BaseURL+"/orders", wrapper.CreateOrder)
+	m.HandleFunc("POST "+options.BaseURL+"/orders/{order_id}/refund", wrapper.RefundOrder)
 	m.HandleFunc("GET "+options.BaseURL+"/products", wrapper.ListProducts)
 	m.HandleFunc("POST "+options.BaseURL+"/webhooks/stripe", wrapper.StripeWebhook)
 

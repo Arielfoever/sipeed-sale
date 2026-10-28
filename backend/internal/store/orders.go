@@ -16,6 +16,10 @@ var (
 	ErrInsufficientStock = errors.New("insufficient stock")
 	// ErrOrderNotFound 订单不存在
 	ErrOrderNotFound = errors.New("order not found")
+	// ErrNotRefundable 订单当前状态不可退款(仅 PAID 可退)
+	ErrNotRefundable = errors.New("order not refundable")
+	// ErrNoPaymentIntent 订单缺少 PaymentIntent(未收到支付回调,不可退)
+	ErrNoPaymentIntent = errors.New("order has no payment intent")
 )
 
 // Order 对应数据库 orders 表。
@@ -159,6 +163,59 @@ func (s *Store) MarkOrderStatusBySession(
 		    updated_at = now()
 		WHERE stripe_session_id = $1 AND status = 'PENDING'
 	`, stripeSessionID, newStatus, paymentIntent)
+	if err != nil {
+		return 0, err
+	}
+	return cmd.RowsAffected(), nil
+}
+
+// RefundOrder 全额退款流程(PAID → REFUNDED):
+//  1. LockRefundable:行锁读取订单,校验 PAID 且已有 PaymentIntent;
+//  2. 调用方拿 PaymentIntent 走 Stripe Refund;
+//  3. MarkOrderRefunded:条件更新 PAID → REFUNDED(幂等,重复调用 0 行)。
+func (s *Store) LockRefundable(
+	ctx context.Context,
+	orderID uuid.UUID,
+) (paymentIntentID string, err error) {
+	tx, err := s.pool.BeginTx(ctx, txDefaults())
+	if err != nil {
+		return "", err
+	}
+	defer rollback(ctx, tx)
+
+	var status string
+	var pi *string
+	err = tx.QueryRow(ctx, `
+		SELECT status, stripe_payment_intent_id
+		FROM orders
+		WHERE id = $1
+		FOR UPDATE
+	`, orderID).Scan(&status, &pi)
+	if isNoRows(err) {
+		return "", ErrOrderNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	if status != "PAID" {
+		return "", ErrNotRefundable
+	}
+	if pi == nil || *pi == "" {
+		return "", ErrNoPaymentIntent
+	}
+	if err := commit(ctx, tx); err != nil {
+		return "", err
+	}
+	return *pi, nil
+}
+
+// MarkOrderRefunded 本地状态推进(PAID → REFUNDED);返回受影响行数。
+func (s *Store) MarkOrderRefunded(ctx context.Context, orderID uuid.UUID) (int64, error) {
+	cmd, err := s.pool.Exec(ctx, `
+		UPDATE orders
+		SET status = 'REFUNDED', updated_at = now()
+		WHERE id = $1 AND status = 'PAID'
+	`, orderID)
 	if err != nil {
 		return 0, err
 	}

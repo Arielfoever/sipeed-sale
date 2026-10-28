@@ -1,0 +1,40 @@
+# 生产形态(数据库 + 后端容器):
+#   前端由宿主机 nginx 自行托管 frontend/dist(见 nginx/sale-sipeed.conf),
+#   nginx 把相同域名的 /api 原样反代到本容器的 8080(不改写 /api 前缀)。
+#
+# 本地联调用的是 docker-compose.dev.yml(只有 PostgreSQL)。
+services:
+  postgres:
+    image: library/postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sale_sipeed
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: sale_sipeed
+    volumes:
+      - sale_sipeed_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sale_sipeed -d sale_sipeed"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # 不发布端口:仅容器网络内访问;如需宿主机 psql 调试,临时映射 5433
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: 8080
+      DATABASE_URL: postgres://sale_sipeed:${POSTGRES_PASSWORD}@postgres:5432/sale_sipeed?sslmode=disable
+      MIGRATIONS_AUTO: "true"
+      STRIPE_API_KEY: ${STRIPE_API_KEY:?set STRIPE_API_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:?set STRIPE_WEBHOOK_SECRET}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL (https://your-domain)}
+    ports:
+      - "127.0.0.1:8080:8080"  # 供宿主机 nginx 反代,不直接公网暴露
+
+volumes:
+  sale_sipeed_pgdata:

@@ -244,3 +244,57 @@ func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request, params g
 	// affected==0:重复投递/已处理 → 幂等成功应答
 	writeJSON(w, http.StatusOK, map[string]bool{"received": true})
 }
+
+// RefundOrder POST /orders/{order_id}/refund —— 全额退款(仅 PAID)。
+// 条件更新幂等:顺序为 锁单校验 → Stripe Refund → 本地 REFUNDED;
+// Stripe 失败返回 502,本地保持 PAID 可重试;Stripe 已成功但本地写库失败时,
+// 重试会得到 Stripe already refunded,由运维排查(README 已注明)。
+func (h *Handler) RefundOrder(w http.ResponseWriter, r *http.Request, orderId types.UUID, params gen.RefundOrderParams) {
+	if params.XRequestId != nil {
+		w.Header().Set("X-Request-Id", params.XRequestId.String())
+	}
+
+	id := uuid.UUID(orderId)
+	pi, err := h.store.LockRefundable(r.Context(), id)
+	switch {
+	case errors.Is(err, store.ErrOrderNotFound):
+		writeError(w, http.StatusNotFound, "订单不存在")
+		return
+	case errors.Is(err, store.ErrNotRefundable):
+		writeError(w, http.StatusConflict, "当前状态不可退款(仅 PAID 可退)")
+		return
+	case errors.Is(err, store.ErrNoPaymentIntent):
+		writeError(w, http.StatusConflict, "订单缺少支付凭据,无法退款")
+		return
+	case err != nil:
+		h.log.ErrorContext(r.Context(), "lock refundable order", "err", err)
+		writeError(w, http.StatusInternalServerError, "退款失败")
+		return
+	}
+
+	if err := h.pays.RefundPaymentIntent(r.Context(), pi); err != nil {
+		h.log.ErrorContext(r.Context(), "stripe refund failed", "err", err, "pi", pi)
+		writeError(w, http.StatusBadGateway, "Stripe 退款失败,请稍后重试")
+		return
+	}
+
+	if _, err := h.store.MarkOrderRefunded(r.Context(), id); err != nil {
+		// Stripe 已退;本地状态需要运维核对(Stripe 侧退款由其幂等保证)
+		h.log.ErrorContext(r.Context(), "mark refunded failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "退款成功但本地状态更新失败")
+		return
+	}
+
+	order, err := h.store.GetOrder(r.Context(), id)
+	if err != nil {
+		h.log.ErrorContext(r.Context(), "load refunded order", "err", err)
+		writeError(w, http.StatusInternalServerError, "退款成功但状态查询失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, &gen.OrderView{
+		Id:         types.UUID(order.ID),
+		Status:     order.Status,
+		TotalPrice: order.TotalPrice,
+		Currency:   order.Currency,
+	})
+}

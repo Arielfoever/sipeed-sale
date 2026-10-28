@@ -152,8 +152,86 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /orders/{order_id}/refund:
+    post:
+      operationId: refundOrder
+      summary: 退款订单(仅 PAID 可退)
+      description: |
+        通过 Stripe Refund(按已记录的 PaymentIntent,全额退款)把 PAID 订单
+        推进为 REFUNDED。条件更新幂等:重复调用命中 0 行则直接返回当前订单。
+
+        注意:示例系统未内置管理员鉴权,生产部署时必须为该端点增加鉴权
+        (网关 ACL / JWT 角色校验)后使用。
+      tags: [orders]
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          description: 订单号(UUIDv7)
+          schema:
+            type: string
+            format: uuid
+        - name: X-Request-Id
+          in: header
+          required: false
+          description: 客户端随机生成的请求 ID(UUIDv7),用于幂等去重与链路追踪
+          schema:
+            type: string
+            format: uuid
+            description: UUIDv7
+      responses:
+        "200":
+          description: 退款完成(或已是 REFUNDED,幂等成功)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderView"
+        "400":
+          description: 请求参数不合法
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: 订单不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 当前状态不可退款(仅 PAID 可退)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: Stripe 退款调用失败
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 components:
   schemas:
+    OrderView:
+      type: object
+      description: 订单的对外可见视图(退款端点等仅需要读取时)
+      required: [id, status, total_price, currency]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: 订单号(UUIDv7)
+        status:
+          type: string
+          description: 订单状态(PENDING/PAID/FAILED/CANCELED/REFUNDED)
+        total_price:
+          type: integer
+          format: int64
+          description: 最小货币单位(分)
+        currency:
+          type: string
+          minLength: 3
+          maxLength: 3
     Product:
       type: object
       required: [id, name, description, price, currency, stock]

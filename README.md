@@ -195,6 +195,30 @@ stripe trigger checkout.session.completed
 | `checkout.session.async_payment_failed` | `FAILED` |
 | `checkout.session.expired` | `CANCELED` |
 
+### 第 5 步验收(退款 / 部署 / CI)
+
+**退款**(示例接口未内置管理员鉴权,生产须在网关或加 JWT 后使用):
+
+```bash
+curl -s -X POST localhost:8080/api/orders/<订单号>/refund \
+  -H "X-Request-Id: $(uuidgen | tr 'A-Z' 'a-z')" | jq
+# → {"id":"...","status":"REFUNDED","total_price":...,"currency":"CNY"}
+# 终态幂等:重复调用 → 409(仅 PAID 可退);Stripe 失败 → 502,本地仍 PAID
+```
+
+**服务器部署**(前端由宿主机 nginx 托管、后端转发到 docker 内):
+
+```bash
+cd frontend && npm run build          # dist/ → scp 到 /opt/sale-sipeed/dist
+cp nginx/sale-sipeed.conf /etc/nginx/conf.d/ && nginx -t && systemctl reload nginx
+docker compose up -d --build          # 依赖 .env 提供密钥(见 docker-compose.yml)
+```
+
+**CI**:`.github/workflows/ci.yml`,每个 PR/push:
+Go(gofmt / vet / build / test / swagger 生成物漂移检查)— 前端(npm ci /
+生成物漂移 / tsc+vite build / 上传 dist 产物)— 依赖前两者成功后构建后端
+Docker 镜像(不推送)。
+
 ## 路线图
 
 | 步骤 | 内容 | tag |
