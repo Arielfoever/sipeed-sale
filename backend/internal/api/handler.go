@@ -5,11 +5,14 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/oapi-codegen/runtime/types"
+	"github.com/stripe/stripe-go/v82"
 
 	gen "sale-sipeed/backend/internal/api/gen"
 	"sale-sipeed/backend/internal/payments"
@@ -168,4 +171,76 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, &gen.Error{Error: msg})
+}
+
+// maxWebhookBody Stripe 事件体上限(保护性限制:目前事件体 <1MB)。
+const maxWebhookBody = 1 << 20
+
+// StripeWebhook POST /webhooks/stripe —— 订单状态唯一的进入通道。
+// 签名校验使用官方 SDK(webhook.ConstructEventWithOptions),
+// 事件映射见 payments.DecideMapping;重复投递由条件更新天然幂等。
+func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request, params gen.StripeWebhookParams) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBody+1))
+	if err != nil || len(body) == 0 {
+		writeError(w, http.StatusBadRequest, "请求体为空或不可读")
+		return
+	}
+	if len(body) > maxWebhookBody {
+		writeError(w, http.StatusBadRequest, "请求体过大")
+		return
+	}
+
+	ev, err := h.pays.VerifyWebhook(body, params.StripeSignature)
+	switch {
+	case errors.Is(err, payments.ErrWebhookNotConfigured):
+		h.log.ErrorContext(r.Context(), "stripe webhook not configured (STRIPE_WEBHOOK_SECRET)")
+		writeError(w, http.StatusServiceUnavailable, "webhook 未配置签名密钥")
+		return
+	case err != nil:
+		// 签名不匹配/格式错误:不暴露细节,返回 400 让 Stripe 重试策略处理
+		h.log.WarnContext(r.Context(), "stripe webhook signature invalid", "err", err)
+		writeError(w, http.StatusBadRequest, "webhook 签名校验失败")
+		return
+	}
+	h.log.InfoContext(r.Context(), "stripe webhook received", "type", string(ev.Type), "id", ev.ID)
+
+	// 只解码 checkout.session 事件;其他类型一律忽略(200)
+	switch ev.Type {
+	case stripe.EventTypeCheckoutSessionCompleted,
+		stripe.EventTypeCheckoutSessionAsyncPaymentSucceeded,
+		stripe.EventTypeCheckoutSessionAsyncPaymentFailed,
+		stripe.EventTypeCheckoutSessionExpired:
+	default:
+		writeJSON(w, http.StatusOK, map[string]bool{"received": true})
+		return
+	}
+
+	var cs stripe.CheckoutSession
+	if err := json.Unmarshal(ev.Data.Raw, &cs); err != nil || cs.ID == "" {
+		h.log.ErrorContext(r.Context(), "unmarshal checkout session", "err", err)
+		// Stripe 会重试;这里按 400 明确回执异常结构
+		writeError(w, http.StatusBadRequest, "webhook 数据结构异常")
+		return
+	}
+
+	newStatus, paymentIntent, apply := payments.DecideMapping(ev.Type, &cs)
+	if !apply {
+		// completed 但异步支付未完成:维持 PENDING,等待 async 事件
+		writeJSON(w, http.StatusOK, map[string]bool{"received": true})
+		return
+	}
+
+	affected, err := h.store.MarkOrderStatusBySession(r.Context(), cs.ID, newStatus, paymentIntent)
+	switch {
+	case err != nil:
+		h.log.ErrorContext(r.Context(), "mark order status", "err", err, "session", strings.TrimSpace(cs.ID), "status", newStatus)
+		// 500 → Stripe 重试投递(幂等条件更新保证安全)
+		writeError(w, http.StatusInternalServerError, "处理回调失败")
+		return
+	case affected == 1:
+		h.log.InfoContext(r.Context(), "order updated via webhook", "status", newStatus, "session", cs.ID)
+	}
+
+	// affected==0:重复投递/已处理 → 幂等成功应答
+	writeJSON(w, http.StatusOK, map[string]bool{"received": true})
 }

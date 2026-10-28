@@ -166,6 +166,35 @@ curl -s -X POST localhost:8080/api/orders \
 `4242 4242 4242 4242`(任意未来日期/CVC)支付后浏览器跳回 `?status=success`
 (该回跳**仅展示**,订单状态由第 4 步 webhook 推进)。
 
+### 第 4 步验收(webhook 确认付款)
+
+订单状态**只认 webhook**;浏览器回跳 success 页仅展示。
+
+```bash
+# 终端 1:stripe-cli 转发回调(会打印 whsec_...,填进 backend/.env 后重启 make run)
+stripe listen \
+  --events checkout.session.completed,checkout.session.async_payment_succeeded,checkout.session.async_payment_failed,checkout.session.expired \
+  --forward-to localhost:8080/api/webhooks/stripe
+
+# 终端 2:前端(npm run dev)下单 → Stripe 沙箱用 4242 4242 4242 4242 支付
+# 终端 1 可见转发,后端日志出现 order updated via webhook status=PAID
+
+# 数据库验证
+# psql ... -c "SELECT id, status, stripe_payment_intent_id FROM orders"
+
+# 幂等复验:直接触发一次假事件(无匹配订单 → affected 0 行,仍返回 received:true)
+stripe trigger checkout.session.completed
+```
+
+事件 → 状态映射(条件更新天然幂等,重复投递命中 0 行):
+
+| 事件 | 状态 |
+| --- | --- |
+| `checkout.session.completed`(payment_status=paid) | `PAID` |
+| `checkout.session.async_payment_succeeded` | `PAID` |
+| `checkout.session.async_payment_failed` | `FAILED` |
+| `checkout.session.expired` | `CANCELED` |
+
 ## 路线图
 
 | 步骤 | 内容 | tag |

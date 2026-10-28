@@ -106,6 +106,52 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /webhooks/stripe:
+    post:
+      operationId: stripeWebhook
+      summary: Stripe webhook 回调(订单状态唯一事实源)
+      description: |
+        接受以下事件并以条件更新(affected rows)天然幂等:
+        - checkout.session.completed:session.payment_status == "paid" 才置 PAID,
+          否则仍为 PENDING(等待异步支付事件)
+        - checkout.session.async_payment_succeeded → PAID
+        - checkout.session.async_payment_failed → FAILED
+        - checkout.session.expired → CANCELED
+
+        请求体为 Stripe 原始 JSON(Signature 头校验),因此请求体按 raw 处理,
+        响应统一为 {received: true}。
+      tags: [orders]
+      parameters:
+        - name: stripe-signature
+          in: header
+          required: true
+          description: Stripe 签名头(t=...,v1=...)
+          schema:
+            type: string
+      x-raw-body: true
+      responses:
+        "200":
+          description: 已接收并处理(签名验证通过)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [received]
+                properties:
+                  received:
+                    type: boolean
+        "400":
+          description: 非本系统事件类型(忽略)或原始体为空
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: 服务端错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 components:
   schemas:
     Product:

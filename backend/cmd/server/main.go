@@ -31,10 +31,13 @@ func main() {
 	defer st.Close()
 	log.Info("database ready")
 
+	pays := payments.New(cfg.StripeAPIKey, cfg.StripeWebhookSecret)
 	if cfg.StripeAPIKey == "" {
 		log.Warn("STRIPE_API_KEY 未配置,下单后无法创建支付链接")
 	}
-	pays := payments.New(cfg.StripeAPIKey)
+	if cfg.StripeWebhookSecret == "" {
+		log.Warn("STRIPE_WEBHOOK_SECRET 未配置,webhook 回调将被拒收")
+	}
 
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,

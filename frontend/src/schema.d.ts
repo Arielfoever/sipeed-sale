@@ -44,6 +44,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/webhooks/stripe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stripe webhook 回调(订单状态唯一事实源)
+         * @description 接受以下事件并以条件更新(affected rows)天然幂等:
+         *     - checkout.session.completed:session.payment_status == "paid" 才置 PAID,
+         *       否则仍为 PENDING(等待异步支付事件)
+         *     - checkout.session.async_payment_succeeded → PAID
+         *     - checkout.session.async_payment_failed → FAILED
+         *     - checkout.session.expired → CANCELED
+         *
+         *     请求体为 Stripe 原始 JSON(Signature 头校验),因此请求体按 raw 处理,
+         *     响应统一为 {received: true}。
+         */
+        post: operations["stripeWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -190,6 +218,49 @@ export interface operations {
             };
             /** @description 库存不足以覆盖本次购买数量 */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 服务端错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    stripeWebhook: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stripe 签名头(t=...,v1=...) */
+                "stripe-signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已接收并处理(签名验证通过) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        received: boolean;
+                    };
+                };
+            };
+            /** @description 非本系统事件类型(忽略)或原始体为空 */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

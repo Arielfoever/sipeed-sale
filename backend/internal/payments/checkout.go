@@ -23,15 +23,16 @@ type Session struct {
 
 // Client 持有 stripe 官方 client;apiKey 为空时处于未配置状态。
 type Client struct {
-	sc *stripe.Client
+	sc       *stripe.Client
+	whSecret string // STRIPE_WEBHOOK_SECRET(whsec_...)
 }
 
 // New 创建 Stripe 客户端;apiKey 为空表示未配置。
-func New(apiKey string) *Client {
+func New(apiKey, webhookSecret string) *Client {
 	if apiKey == "" {
-		return &Client{}
+		return &Client{whSecret: webhookSecret}
 	}
-	return &Client{sc: stripe.NewClient(apiKey)}
+	return &Client{sc: stripe.NewClient(apiKey), whSecret: webhookSecret}
 }
 
 // CheckoutInfo 建立一个 Checkout Session 所需的信息。

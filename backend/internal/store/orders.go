@@ -20,18 +20,19 @@ var (
 
 // Order 对应数据库 orders 表。
 type Order struct {
-	ID               uuid.UUID // 订单号(UUIDv7,应用层生成)
-	ProductID        uuid.UUID
-	Quantity         int64
-	UnitPrice        int64 // 分
-	TotalPrice       int64 // 分
-	Currency         string
-	Status           string // PENDING / PAID / FAILED / CANCELED / REFUNDED
-	RequestID        *uuid.UUID
-	StripeSessionID  *string // Checkout Session(第 3 步)
-	StripeSessionURL *string // Checkout 付款页 URL(session 仅创建时返回一次)
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID                    uuid.UUID // 订单号(UUIDv7,应用层生成)
+	ProductID             uuid.UUID
+	Quantity              int64
+	UnitPrice             int64 // 分
+	TotalPrice            int64 // 分
+	Currency              string
+	Status                string // PENDING / PAID / FAILED / CANCELED / REFUNDED
+	RequestID             *uuid.UUID
+	StripeSessionID       *string // Checkout Session(第 3 步)
+	StripeSessionURL      *string // Checkout 付款页 URL(session 仅创建时返回一次)
+	StripePaymentIntentID *string // PaymentIntent(webhook 推进时记录,退款用)
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 // CreateOrderInput 下单入参。
@@ -141,15 +142,23 @@ func (s *Store) CreateOrder(ctx context.Context, in CreateOrderInput) (Order, er
 	}, nil
 }
 
-// MarkOrderPaid 结账成功的回调确认(第 4 步 webhook 使用)。
-// 幂等核心:只在旧状态为 PENDING 时推进到 PAID,重复投递此 UPDATE 将命中 0 行。
-// 返回受影响行数,调用方据此判断是首次确认还是重复投递。
-func (s *Store) MarkOrderPaid(ctx context.Context, stripeSessionID string) (int64, error) {
+// MarkOrderStatusBySession 由 Stripe(webhook)把 PENDING 订单推进到目标
+// 状态,幂等核心:仅当旧状态为 PENDING 时更新,重复投递命中 0 行。
+// paymentIntent 可选:支付成功时记录 PaymentIntent(退款用)。
+// 返回受影响行数:1 = 首次确认,0 = 重复投递 / 订单不存在 / 状态不符。
+func (s *Store) MarkOrderStatusBySession(
+	ctx context.Context,
+	stripeSessionID string,
+	newStatus string,
+	paymentIntent *string,
+) (int64, error) {
 	cmd, err := s.pool.Exec(ctx, `
 		UPDATE orders
-		SET status = 'PAID', updated_at = now()
+		SET status = $2,
+		    stripe_payment_intent_id = COALESCE($3, stripe_payment_intent_id),
+		    updated_at = now()
 		WHERE stripe_session_id = $1 AND status = 'PENDING'
-	`, stripeSessionID)
+	`, stripeSessionID, newStatus, paymentIntent)
 	if err != nil {
 		return 0, err
 	}
@@ -186,7 +195,8 @@ func (s *Store) getOrderByRequestID(
 
 const orderColumnsSQL = `
 	SELECT id, product_id, quantity, unit_price, total_price, currency, status,
-	       request_id, stripe_session_id, stripe_session_url, created_at, updated_at
+	       request_id, stripe_session_id, stripe_session_url,
+	       stripe_payment_intent_id, created_at, updated_at
 `
 
 func scanOrderRow(rows pgxRow) (Order, error) {
@@ -194,7 +204,7 @@ func scanOrderRow(rows pgxRow) (Order, error) {
 	err := rows.Scan(
 		&o.ID, &o.ProductID, &o.Quantity, &o.UnitPrice, &o.TotalPrice,
 		&o.Currency, &o.Status, &o.RequestID, &o.StripeSessionID,
-		&o.StripeSessionURL, &o.CreatedAt, &o.UpdatedAt,
+		&o.StripeSessionURL, &o.StripePaymentIntentID, &o.CreatedAt, &o.UpdatedAt,
 	)
 	if err != nil {
 		return Order{}, err

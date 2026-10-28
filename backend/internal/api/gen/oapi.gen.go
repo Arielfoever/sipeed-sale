@@ -70,6 +70,12 @@ type CreateOrderParams struct {
 	XRequestId *openapi_types.UUID `json:"X-Request-Id,omitempty"`
 }
 
+// StripeWebhookParams defines parameters for StripeWebhook.
+type StripeWebhookParams struct {
+	// StripeSignature Stripe 签名头(t=...,v1=...)
+	StripeSignature string `json:"stripe-signature"`
+}
+
 // CreateOrderJSONRequestBody defines body for CreateOrder for application/json ContentType.
 type CreateOrderJSONRequestBody = CreateOrderPayload
 
@@ -81,6 +87,9 @@ type ServerInterface interface {
 	// 预售商品列表
 	// (GET /products)
 	ListProducts(w http.ResponseWriter, r *http.Request)
+	// Stripe webhook 回调(订单状态唯一事实源)
+	// (POST /webhooks/stripe)
+	StripeWebhook(w http.ResponseWriter, r *http.Request, params StripeWebhookParams)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -137,6 +146,50 @@ func (siw *ServerInterfaceWrapper) ListProducts(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListProducts(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StripeWebhook operation middleware
+func (siw *ServerInterfaceWrapper) StripeWebhook(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StripeWebhookParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "stripe-signature" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("stripe-signature")]; found {
+		var StripeSignature string
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "stripe-signature", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "stripe-signature", valueList[0], &StripeSignature, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "stripe-signature", Err: err})
+			return
+		}
+
+		params.StripeSignature = StripeSignature
+
+	} else {
+		err := fmt.Errorf("Header parameter stripe-signature is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "stripe-signature", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StripeWebhook(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -268,6 +321,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 
 	m.HandleFunc("POST "+options.BaseURL+"/orders", wrapper.CreateOrder)
 	m.HandleFunc("GET "+options.BaseURL+"/products", wrapper.ListProducts)
+	m.HandleFunc("POST "+options.BaseURL+"/webhooks/stripe", wrapper.StripeWebhook)
 
 	return m
 }
