@@ -68,7 +68,7 @@ export function App(): ReactElement {
   const [pending, setPending] = useState<PendingMap>({});
   const [orderErrors, setOrderErrors] = useState<OrderErrorMap>({});
   const [orderResults, setOrderResults] = useState<OrderResultMap>({});
-  // 浏览器从 Stripe 回跳(仅展示,订单状态以 webhook 为准,见第 4 步)
+  // 浏览器从 Stripe 回跳(仅展示,订单状态以 webhook 为准)
   const [returnBanner, setReturnBanner] = useState<string | null>(() => {
     const params = new URLSearchParams(window.location.search);
     const status = params.get("status");
@@ -149,15 +149,14 @@ export function App(): ReactElement {
       });
       setPending((prev) => ({ ...prev, [product.id]: true }));
       try {
-        // 第 1 步契约:前端发起 POST /api/orders。
-        // 后端尚未实现时,这里得到 ECONNREFUSED(代理拒绝)或 404,
-        // 均视为预期中的 mock 阶段行为并向用户明确提示。
+        // 下单契约:前端只提交 product_id + quantity,金额由后端计算;
+        // checkout_url 由后端创建 Stripe Checkout Session 后返回。
         const order = await createOrder({
           product_id: product.id,
           quantity,
         });
         setOrderResults((prev) => ({ ...prev, [product.id]: order }));
-        // 第 3 步约定:拿到 Checkout URL 后在新标签页打开 Stripe 付款页,
+        // 拿到 Checkout URL 后在新标签页打开 Stripe 付款页,
         // 当前页弹出「正在付款」弹窗,用户可随时点「刷新情况」查看订单状态。
         if (order.checkout_url) {
           window.open(order.checkout_url, "_blank", "noopener,noreferrer");
@@ -165,12 +164,9 @@ export function App(): ReactElement {
           setPayingOpen(true);
         }
       } catch (err) {
-        const status = err instanceof ApiError ? err.status : undefined;
         const message =
           err instanceof ApiError
-            ? status === 404
-              ? "后端尚未提供 /api/orders(404):此为第 1 步的预期 placeholder。"
-              : err.message
+            ? err.message
             : "下单请求发送失败:后端服务不可用(请确认后端已启动)。";
         setOrderErrors((prev) => ({ ...prev, [product.id]: message }));
       } finally {

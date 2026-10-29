@@ -1,5 +1,5 @@
-// Package payments 封装 Stripe 集成(官方 stripe-go SDK,api/v82)。
-// 第 3 步:Checkout Session 创建;第 4 步:webhook 签名验证;第 5 步:退款。
+// Package payments 封装 Stripe 集成(官方 stripe-go SDK,v82):
+// Checkout Session 创建、webhook 验签与事件拉取、会话过期、退款。
 package payments
 
 import (

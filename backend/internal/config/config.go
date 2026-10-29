@@ -1,6 +1,6 @@
 // Package config 读取环境变量(优先 backend/.env 中的值)。
-// 第 3 步起,Stripe 相关凭据也放这里读取(env 文件包含 API 调用
-// 信息、域名),不会提交真实密钥。
+// 覆盖数据库连接、迁移开关、Stripe 凭据与站点公网地址;
+// 真实密钥不入库、不提交 git(.env 已被 .gitignore 排除)。
 package config
 
 import (
@@ -23,7 +23,7 @@ type Config struct {
 	// PublicBaseURL 前端站点的公网地址,用于拼接 Stripe 的
 	// success_url / cancel_url(浏览器回跳,仅展示,不修改订单状态)
 	PublicBaseURL string
-	// 第 4 步:Stripe webhook 签名密钥(whsec_...,stripe-cli 或后台获取)
+	// StripeWebhookSecret Stripe webhook 签名密钥(whsec_...,stripe-cli 或后台获取)
 	StripeWebhookSecret string
 }
 

@@ -90,7 +90,7 @@ func (h *Handler) CreateOrder(w http.ResponseWriter, r *http.Request, params gen
 		return
 	}
 
-	// 第 3 步:为 PENDING 订单准备 Stripe Checkout 链接。
+	// 为 PENDING 订单准备 Stripe Checkout 链接:
 	// - 订单已存在 session(幂等路径)→ 直接复用已存 URL;
 	// - 尚无 session → 创建新 session 并落库;
 	// - 复用/创建失败均不影响订单本身(仍 PENDING,可重试),返回 502。
@@ -226,8 +226,10 @@ const maxWebhookBody = 1 << 20
 
 // StripeWebhook POST /webhooks/stripe —— 订单状态唯一的进入通道。
 // 签名校验使用官方 SDK(stripe.ValidatePayload,只验签不解析,避开 CLI
-// 测试事件 created 为字符串与 SDK int64 字段不兼容的坑),事件映射见
-// payments.DecideMapping;重复投递由条件更新天然幂等。
+// 测试事件 created 为字符串与 SDK int64 字段不兼容的坑)。Stripe 默认
+// 投递 thin event(仅 related_object 指针,无内嵌 data.object),处理时按
+// 官方要求用 API 拉取权威 CheckoutSession(payments.FetchCheckoutSession)
+// 后再映射状态(payments.DecideMapping);重复投递由条件更新天然幂等。
 func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request, params gen.StripeWebhookParams) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBody+1))
 	if err != nil || len(body) == 0 {

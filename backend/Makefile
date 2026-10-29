@@ -11,7 +11,7 @@ build: ## 编译检查
 vet: ## go vet 静态检查
 	go vet ./...
 
-test: ## 单元测试(后续步骤补充)
+test: ## 单元测试
 	go test ./...
 
 run: ## 本地启动(需先有 PostgreSQL,可 docker compose -f docker-compose.dev.yml up -d)

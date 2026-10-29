@@ -2,7 +2,7 @@
  * API 客户端 —— 由 OpenAPI 规范(openapi.yaml)生成,不再手写请求层。
  *
  * 生成流程:npm run gen:api
- *   ../openapi.yaml --openapi-typescript--> src/api/schema.d.ts
+ *   ../openapi.yaml --openapi-typescript--> src/schema.d.ts
  *
  * 运行时使用 openapi-fetch(约 1KB,零依赖的多 polyfill 轻客户端),
  * 请求路径/方法/请求体/响应体均由 OpenAPI 类型约束。

@@ -1,5 +1,5 @@
 /**
- * 领域类型 —— 全部从 OpenAPI 规范生成的 schema 派生(../api/schema.d.ts
+ * 领域类型 —— 全部从 OpenAPI 规范生成的 schema 派生(./schema.d.ts
  * 由 `npm run gen:api` 基于 ../openapi.yaml 生成)。
  *
  * 这里只保留展示层的格式化工具,不再手写业务类型,避免与 API 契约产生

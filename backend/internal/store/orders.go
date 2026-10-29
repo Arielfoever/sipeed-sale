@@ -34,7 +34,7 @@ type Order struct {
 	Currency              string
 	Status                string // PENDING / PAID / FAILED / CANCELED / REFUNDED
 	RequestID             *uuid.UUID
-	StripeSessionID       *string // Checkout Session(第 3 步)
+	StripeSessionID       *string // Stripe Checkout Session ID
 	StripeSessionURL      *string // Checkout 付款页 URL(session 仅创建时返回一次)
 	StripePaymentIntentID *string // PaymentIntent(webhook 推进时记录,退款用)
 	CreatedAt             time.Time
@@ -51,11 +51,10 @@ type CreateOrderInput struct {
 }
 
 // CreateOrder 在单个事务内完成:
-//  1. SELECT ... FOR UPDATE 锁定商品行,校验库存;
-//  2. 计算 total_price 单位"分"(unit_price * quantity);
-//  3. 生成 UUIDv7 订单号并插入 PENDING 订单,request_id 冲突则复用已存在
-//     订单(幂等);
-//  4. 扣减库存。
+//  1. SELECT ... FOR UPDATE 锁定商品行,校验库存并计算 total_price(分);
+//  2. 生成 UUIDv7 订单号并插入 PENDING 订单;request_id 冲突则复用既有
+//     订单(幂等,不重复扣库存);
+//  3. 扣减库存(商品行已被锁定,必成功)。
 //
 // 金额一律由服务端按商品表价格计算,不受入参影响。
 func (s *Store) CreateOrder(ctx context.Context, in CreateOrderInput) (Order, error) {
@@ -171,10 +170,10 @@ func (s *Store) MarkOrderStatusBySession(
 	return cmd.RowsAffected(), nil
 }
 
-// RefundOrder 全额退款流程(PAID → REFUNDED):
-//  1. LockRefundable:行锁读取订单,校验 PAID 且已有 PaymentIntent;
-//  2. 调用方拿 PaymentIntent 走 Stripe Refund;
-//  3. MarkOrderRefunded:条件更新 PAID → REFUNDED(幂等,重复调用 0 行)。
+// LockRefundable 退款第一步:事务内行锁读取订单,校验状态为 PAID 且已有
+// PaymentIntent,返回 PaymentIntent ID 供调用方调 Stripe 退款。
+// 后续步骤由 handler 编排:Stripe Refund → MarkOrderRefunded 条件更新
+// (PAID → REFUNDED,幂等,重复调用命中 0 行)。
 func (s *Store) LockRefundable(
 	ctx context.Context,
 	orderID uuid.UUID,
@@ -343,8 +342,8 @@ func scanOrderRow(rows pgxRow) (Order, error) {
 	return o, nil
 }
 
-// AttachStripeSession 把（一次性创建的）Stripe Checkout Session 绑定到
-// PENDING 订单上;(session id / url 存库,重复 CREATE 直接复用,幂等)
+// AttachStripeSession 把(一次性创建的)Stripe Checkout Session 绑定到
+// PENDING 订单上(session id / url 落库);订单非 PENDING 时返回 ErrOrderNotFound。
 func (s *Store) AttachStripeSession(
 	ctx context.Context,
 	orderID uuid.UUID,

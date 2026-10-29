@@ -7,8 +7,8 @@ import { v7 as uuidV7 } from "uuid";
  * 仅用于本地开发的 /api mock 中间件(apply: "serve",不影响生产构建)。
  *
  * 设计目标:
- * 1. 与未来真实后端保持同一套契约(端点、请求/响应体、整数金额),
- *    mock 返回体直接镜像第 2 步 Go 后端的响应结构;
+ * 1. 与真实后端保持同一套契约(端点、请求/响应体、整数金额),
+ *    mock 返回体直接镜像 Go 后端的响应结构;
  * 2. 下单价格同样由"服务端"按商品单价 × 数量计算——从前端拿到的
  *    mock 响应里 sum 一分不多一分不少,用于自证"前端不传金额"的约定;
  * 3. 回显 X-Request-Id,方便联调幂等头。
@@ -161,7 +161,7 @@ export function mockApiPlugin(): Plugin {
               {
                 // 订单号 = UUIDv7(时间戳有序),与真实后端一致
                 id: uuidV7(),
-                // 与真实后端一致的初始状态;第 4 步 webhook 推进为 PAID
+                // 与真实后端一致的初始状态;webhook 推进为 PAID
                 status: "PENDING",
                 // 金额由"服务端"(此处为 mock)计算,前端无从插手
                 total_price: product.price * quantity,
