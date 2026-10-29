@@ -1,9 +1,19 @@
-# 开发/联调用:只起一个 PostgreSQL(生产使用服务器上的数据库,不用此文件)。
-# 后端与前端仍直接跑在本机(docker compose 主要功能在附加项实现)。
+# 本地开发/联调:一键起全栈(PostgreSQL + 后端 + 前端 nginx 托管 dist)。
+#
+#   docker compose -f docker-compose.dev.yml up -d --build
+#   → 前端  http://localhost:4173   (nginx,SPA,/api 反代 backend 容器)
+#   → 后端  http://localhost:8080   (curl /healthz、swagger 生成的 /api)
+#   → PG    localhost:5433          (宿主机可连 psql 核对订单)
+#
+# Stripe 凭据:若 backend/.env 存在则自动注入(optional;没有也能起,
+# 下单会提示“支付通道未配置”)。PUBLIC_BASE_URL 必须是浏览器可达的前端地址。
+#
+# 生产形态见 docker-compose.yml(前端由宿主机 nginx 托管,不进容器)。
 services:
   postgres:
     image: library/postgres:17
     container_name: sale-sipeed-postgres
+    restart: unless-stopped
     ports:
       - "5433:5432"
     environment:
@@ -17,6 +27,37 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  backend:
+    build: ./backend
+    container_name: sale-sipeed-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: 8080
+      # 容器网络内连 postgres 服务;宿主机联调仍可连 localhost:5433
+      DATABASE_URL: postgres://sale_sipeed:sale_sipeed@postgres:5432/sale_sipeed?sslmode=disable
+      MIGRATIONS_AUTO: "true"
+      # 浏览器(所以要用宿主机可达的前端地址)回跳地址
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:4173}
+    # backend/.env 若存在则注入 STRIPE_API_KEY / STRIPE_WEBHOOK_SECRET 等
+    # (文件不存在时静默跳过;显式 environment 优先级高于 env_file)
+    env_file:
+      - path: ./backend/.env
+        required: false
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build: ./frontend
+    container_name: sale-sipeed-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "4173:80"
 
 volumes:
   sale_sipeed_pgdata:

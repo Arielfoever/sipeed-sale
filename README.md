@@ -23,18 +23,25 @@
 ### 后端运行(首次)
 
 ```bash
-# 1. 起 PostgreSQL(仅本机测试;生产用服务器上的 PG,连接串见 .env.example)
-docker compose -f docker-compose.dev.yml up -d
+# 快速方式:一键起全栈(PG + 后端 + 前端 nginx,Stripe 凭据可选注入)
+docker compose -f docker-compose.dev.yml up -d --build
+#   前端 http://localhost:4173 / 后端 http://localhost:8080 / PG localhost:5433
 
-# 2. 后端配置(按需修改 DATABASE_URL / SERVER_PORT 等)
+# 或者:仅起 PostgreSQL(仅本机测试;生产用服务器上的 PG,连接串见 .env.example),
+# 后端/前端跑在本机:
+docker compose -f docker-compose.dev.yml up -d postgres
+
+# 后端配置(按需修改 DATABASE_URL / SERVER_PORT 等)
 cd backend && cp .env.example .env
 
-# 3. 生成 swagger 服务端代码并启动
+# 生成 swagger 服务端代码并启动
 make gen
 make run
 ```
 
-`make run` 自动执行迁移并监听 `:8080`;`curl -s localhost:8080/healthz`。
+`make run` 自动执行迁移并监听 `:8080`;`curl -s localhost:8080/healthz`
+(一键全栈方式下,前端在 `http://localhost:4173`,但 `healthz` 仍需直接访问
+后端 `localhost:8080`,`/healthz` 不在 `/api` 前缀下)。
 
 ### 验收(第 2 步:curl 落库返回订单号)
 

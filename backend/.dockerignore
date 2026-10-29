@@ -1,0 +1,7 @@
+# 密钥与本地垃圾文件不得进镜像(backend/.env 由 compose env_file 注入)
+.env
+.env.*
+!.env.example
+bin/
+sale-sipeed-api
+server
