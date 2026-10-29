@@ -225,8 +225,9 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 const maxWebhookBody = 1 << 20
 
 // StripeWebhook POST /webhooks/stripe —— 订单状态唯一的进入通道。
-// 签名校验使用官方 SDK(webhook.ConstructEventWithOptions),
-// 事件映射见 payments.DecideMapping;重复投递由条件更新天然幂等。
+// 签名校验使用官方 SDK(stripe.ValidatePayload,只验签不解析,避开 CLI
+// 测试事件 created 为字符串与 SDK int64 字段不兼容的坑),事件映射见
+// payments.DecideMapping;重复投递由条件更新天然幂等。
 func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request, params gen.StripeWebhookParams) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBody+1))
 	if err != nil || len(body) == 0 {
@@ -245,26 +246,32 @@ func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request, params g
 		writeError(w, http.StatusServiceUnavailable, "webhook 未配置签名密钥")
 		return
 	case err != nil:
-		// 签名不匹配/格式错误:不暴露细节,返回 400 让 Stripe 重试策略处理
-		h.log.WarnContext(r.Context(), "stripe webhook signature invalid", "err", err)
+		// 签名不匹配/格式错误:返回 400 让 Stripe 重试策略处理。
+		// 绝大多数情况是后端 .env 的 STRIPE_WEBHOOK_SECRET 与 `stripe listen`
+		// 打印的 whsec_ 不一致,或改完 .env 没重启 backend 容器。
+		h.log.ErrorContext(r.Context(), "stripe webhook signature invalid",
+			"err", err.Error(),
+			"hint", "对比 backend/.env 的 STRIPE_WEBHOOK_SECRET 与 `stripe listen` 打印的 whsec_;改后需 docker compose up -d backend 重启")
 		writeError(w, http.StatusBadRequest, "webhook 签名校验失败")
 		return
 	}
-	h.log.InfoContext(r.Context(), "stripe webhook received", "type", string(ev.Type), "id", ev.ID)
+	h.log.InfoContext(r.Context(), "stripe webhook received", "type", ev.Type, "id", ev.ID)
 
-	// 只解码 checkout.session 事件;其他类型一律忽略(200)
+	// 只处理 checkout.session.* 事件;其他类型一律忽略(200)
 	switch ev.Type {
-	case stripe.EventTypeCheckoutSessionCompleted,
-		stripe.EventTypeCheckoutSessionAsyncPaymentSucceeded,
-		stripe.EventTypeCheckoutSessionAsyncPaymentFailed,
-		stripe.EventTypeCheckoutSessionExpired:
+	case string(stripe.EventTypeCheckoutSessionCompleted),
+		string(stripe.EventTypeCheckoutSessionAsyncPaymentSucceeded),
+		string(stripe.EventTypeCheckoutSessionAsyncPaymentFailed),
+		string(stripe.EventTypeCheckoutSessionExpired):
 	default:
 		writeJSON(w, http.StatusOK, map[string]bool{"received": true})
 		return
 	}
 
-	var cs stripe.CheckoutSession
-	if err := json.Unmarshal(ev.Data.Raw, &cs); err != nil || cs.ID == "" {
+	// ev.Data 已是 data.object 的原始 JSON(VerifyWebhook 已解出),
+	// 用宽松结构取我们关心的字段(created 等字符串字段不影响)。
+	var cs payments.CheckoutSession
+	if err := json.Unmarshal(ev.Data, &cs); err != nil || cs.ID == "" {
 		h.log.ErrorContext(r.Context(), "unmarshal checkout session", "err", err)
 		// Stripe 会重试;这里按 400 明确回执异常结构
 		writeError(w, http.StatusBadRequest, "webhook 数据结构异常")
