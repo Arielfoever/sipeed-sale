@@ -1,9 +1,11 @@
 package payments
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/stripe/stripe-go/v82"
@@ -17,10 +19,23 @@ var ErrWebhookNotConfigured = errors.New("payments: STRIPE_WEBHOOK_SECRET not co
 // stripe-cli 生成的测试事件里 `created` 是字符串,而 SDK 的
 // Event.Created 是 int64,直接用 ConstructEvent 会在解析阶段失败
 // (签名本身是通过的,纯粹是 SDK 结构体不兼容 CLI 的序列化格式)。
+//
+// Stripe 现在默认投递 thin event(`object: v2.core.event`),其中没有
+// `data.object`,只有 `related_object` 指针 {id,type,url};处理时必须按
+// 官方要求用 Stripe API 拉取关联对象的完整内容(见 FetchCheckoutSession)。
 type WebhookEvent struct {
 	ID   string          // 事件 ID
-	Type string          // 如 checkout.session.completed
-	Data json.RawMessage // data.object 原始 JSON(仅保留需要的字段)
+	Type string          // 如 checkout.session.completed(已去版本前缀)
+	Data json.RawMessage // data.object 原始 JSON(snapshot event 才有;thin 为空)
+	// RelatedObject 是 thin event 的关联对象指针(id/type/url),snapshot 为空
+	RelatedObject *RelatedObject
+}
+
+// RelatedObject 是 thin event 里对关联对象的引用(需再 fetch 完整内容)。
+type RelatedObject struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	URL  string `json:"url"`
 }
 
 // VerifyWebhook 使用官方 webhook 库验证签名(stripe-cli 转发的本地请求
@@ -44,18 +59,20 @@ func (c *Client) VerifyWebhook(payload []byte, sigHeader string) (WebhookEvent, 
 		Data struct {
 			Object json.RawMessage `json:"object"`
 		} `json:"data"`
+		RelatedObject *RelatedObject `json:"related_object"`
 	}
 	if err := json.Unmarshal(payload, &envelope); err != nil {
 		return WebhookEvent{}, fmt.Errorf("parse webhook envelope: %w", err)
 	}
 	return WebhookEvent{
-		ID:   envelope.ID,
-		Type: NormalizeEventType(envelope.Type),
-		Data: envelope.Data.Object,
+		ID:            envelope.ID,
+		Type:          NormalizeEventType(envelope.Type),
+		Data:          envelope.Data.Object,
+		RelatedObject: envelope.RelatedObject,
 	}, nil
 }
 
-// CheckoutSession 是我们从 data.object 中实际需要的字段。
+// CheckoutSession 是我们从 CheckoutSession 对象中实际需要的字段。
 // 故意用 string / json.RawMessage 而不是 SDK 的强类型,避免 stripe-cli
 // 测试事件(created 等字段为字符串)导致的解析失败。
 type CheckoutSession struct {
@@ -81,6 +98,36 @@ func (c *CheckoutSession) PaymentIntentID() string {
 		return obj.ID
 	}
 	return ""
+}
+
+// FetchCheckoutSession 按 Stripe 官方 thin event 要求,从 API 拉取与事件
+// 关联的 CheckoutSession 完整对象(thin event 的 related_object 只是指针,
+// 没有 data.object;snapshot event 也可统一走此权威路径)。
+// 返回我们关心的字段;错误可直接用 IsNotFound 判断对象是否已不存在。
+func (c *Client) FetchCheckoutSession(ctx context.Context, sessionID string) (*CheckoutSession, error) {
+	if c.sc == nil {
+		return nil, ErrNotConfigured
+	}
+	sess, err := c.sc.V1CheckoutSessions.Retrieve(ctx, sessionID, nil)
+	if err != nil {
+		return nil, err
+	}
+	cs := &CheckoutSession{ID: sess.ID, PaymentStatus: string(sess.PaymentStatus)}
+	if sess.PaymentIntent != nil && sess.PaymentIntent.ID != "" {
+		// 统一存成字符串形态("pi_..."),PaymentIntentID() 两种都能解
+		b, _ := json.Marshal(sess.PaymentIntent.ID)
+		cs.PaymentIntent = b
+	}
+	return cs, nil
+}
+
+// IsNotFound 判断 Stripe API 错误是否为对象不存在(404)。
+func IsNotFound(err error) bool {
+	var se *stripe.Error
+	if errors.As(err, &se) {
+		return se.HTTPStatusCode == http.StatusNotFound
+	}
+	return false
 }
 
 // NormalizeEventType 把 Stripe 事件类型归一化为不带版本前缀的规范形式。

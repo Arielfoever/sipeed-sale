@@ -268,17 +268,49 @@ func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request, params g
 		return
 	}
 
-	// ev.Data 已是 data.object 的原始 JSON(VerifyWebhook 已解出),
-	// 用宽松结构取我们关心的字段(created 等字符串字段不影响)。
-	var cs payments.CheckoutSession
-	if err := json.Unmarshal(ev.Data, &cs); err != nil || cs.ID == "" {
-		h.log.ErrorContext(r.Context(), "unmarshal checkout session", "err", err)
-		// Stripe 会重试;这里按 400 明确回执异常结构
+	// 定位关联的 CheckoutSession ID:thin event 用 related_object.id
+	// (官方 thin event 格式,无 data.object);snapshot event 用 data.object.id。
+	sessionID := ""
+	if ev.RelatedObject != nil {
+		sessionID = ev.RelatedObject.ID
+	}
+	if sessionID == "" && len(ev.Data) > 0 {
+		var obj struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(ev.Data, &obj); err == nil {
+			sessionID = obj.ID
+		}
+	}
+	if sessionID == "" {
+		h.log.ErrorContext(r.Context(), "webhook event missing checkout session id",
+			"type", ev.Type, "event", ev.ID)
 		writeError(w, http.StatusBadRequest, "webhook 数据结构异常")
 		return
 	}
 
-	newStatus, paymentIntent, apply := payments.DecideMapping(ev.Type, &cs)
+	// 按 Stripe 官方 thin event 要求:用 API 拉取完整 CheckoutSession,
+	// 取权威的 payment_status / payment_intent(不依赖 body 内嵌对象)。
+	cs, err := h.pays.FetchCheckoutSession(r.Context(), sessionID)
+	switch {
+	case errors.Is(err, payments.ErrNotConfigured):
+		h.log.ErrorContext(r.Context(), "stripe not configured; cannot fetch session for webhook")
+		writeError(w, http.StatusServiceUnavailable, "支付通道未配置(STRIPE_API_KEY)")
+		return
+	case err != nil:
+		if payments.IsNotFound(err) {
+			// 对象已不存在(如 session 被 Stripe 侧删除):按已处理幂等返回
+			h.log.WarnContext(r.Context(), "checkout session not found for webhook", "session", sessionID, "err", err)
+			writeJSON(w, http.StatusOK, map[string]bool{"received": true})
+			return
+		}
+		h.log.ErrorContext(r.Context(), "fetch checkout session for webhook", "err", err, "session", sessionID)
+		// 500 → Stripe 重试投递(幂等条件更新保证安全)
+		writeError(w, http.StatusInternalServerError, "处理回调失败")
+		return
+	}
+
+	newStatus, paymentIntent, apply := payments.DecideMapping(ev.Type, cs)
 	if !apply {
 		// completed 但异步支付未完成:维持 PENDING,等待 async 事件
 		writeJSON(w, http.StatusOK, map[string]bool{"received": true})

@@ -202,6 +202,12 @@ stripe trigger checkout.session.completed
 | `checkout.session.async_payment_failed` | `FAILED` |
 | `checkout.session.expired` | `CANCELED` |
 
+> **thin / snapshot 事件**:Stripe 默认投递 thin event(`object: v2.core.event`,
+> 只有 `related_object` 指针、没有内嵌 `data.object`)。后端按官方要求,在
+> 收到 `checkout.session.*` 事件后用 `V1CheckoutSessions.Retrieve` 拉取完整
+> CheckoutSession(权威 `payment_status` / `payment_intent`),再推进订单状态;
+> snapshot event(内嵌 `data.object`)同样走此路径,两种格式均可处理。
+
 ### 第 5 步验收(退款 / 部署 / CI)
 
 **退款**(示例接口未内置管理员鉴权,生产须在网关或加 JWT 后使用):
