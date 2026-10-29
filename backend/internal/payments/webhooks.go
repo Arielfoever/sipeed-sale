@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/stripe/stripe-go/v82"
 )
@@ -47,7 +48,11 @@ func (c *Client) VerifyWebhook(payload []byte, sigHeader string) (WebhookEvent, 
 	if err := json.Unmarshal(payload, &envelope); err != nil {
 		return WebhookEvent{}, fmt.Errorf("parse webhook envelope: %w", err)
 	}
-	return WebhookEvent{ID: envelope.ID, Type: envelope.Type, Data: envelope.Data.Object}, nil
+	return WebhookEvent{
+		ID:   envelope.ID,
+		Type: NormalizeEventType(envelope.Type),
+		Data: envelope.Data.Object,
+	}, nil
 }
 
 // CheckoutSession 是我们从 data.object 中实际需要的字段。
@@ -76,6 +81,22 @@ func (c *CheckoutSession) PaymentIntentID() string {
 		return obj.ID
 	}
 	return ""
+}
+
+// NormalizeEventType 把 Stripe 事件类型归一化为不带版本前缀的规范形式。
+// stripe-cli 转发的测试事件带 `v1.` 前缀(如 v1.checkout.session.completed),
+// 而 SDK 常量与真实投递是 `checkout.session.completed`;统一剥掉 `v<n>.` 前缀。
+func NormalizeEventType(evType string) string {
+	seg, _, ok := strings.Cut(evType, ".")
+	if !ok {
+		return evType // 无点,原样返回
+	}
+	// 仅当第一段形如 v<数字>(如 v1/v2)时视为版本前缀并剥掉;
+	// 否则(如第一段就是 checkout)原样返回。
+	if len(seg) > 1 && seg[0] == 'v' && seg[1] >= '0' && seg[1] <= '9' {
+		return evType[len(seg)+1:]
+	}
+	return evType
 }
 
 // DecideMapping 把事件 → 目标状态:
