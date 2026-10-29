@@ -92,6 +92,13 @@ export function App(): ReactElement {
     }
   }, []);
 
+  // 下单成功但尚未完成支付:当前页弹出「正在付款」弹窗(新标签页已开 Stripe)
+  const [payingOpen, setPayingOpen] = useState(false);
+  const [payingOrder, setPayingOrder] = useState<{
+    id: string;
+    checkoutUrl: string;
+  } | null>(null);
+
   // 清理回跳参数,避免刷新时重复提示
   useEffect(() => {
     if (returnBanner) {
@@ -150,9 +157,12 @@ export function App(): ReactElement {
           quantity,
         });
         setOrderResults((prev) => ({ ...prev, [product.id]: order }));
-        // 第 3 步约定:拿到后端返回的 Checkout URL 后跳转 Stripe 付款页
+        // 第 3 步约定:拿到 Checkout URL 后在新标签页打开 Stripe 付款页,
+        // 当前页弹出「正在付款」弹窗,用户可随时点「刷新情况」查看订单状态。
         if (order.checkout_url) {
-          window.location.assign(order.checkout_url);
+          window.open(order.checkout_url, "_blank", "noopener,noreferrer");
+          setPayingOrder({ id: order.id, checkoutUrl: order.checkout_url });
+          setPayingOpen(true);
         }
       } catch (err) {
         const status = err instanceof ApiError ? err.status : undefined;
@@ -253,6 +263,12 @@ export function App(): ReactElement {
         ) : null}
         <OrderLookupSection prefill={lookupPrefill} />
         {body}
+        <PaymentWatcherModal
+          open={payingOpen}
+          orderId={payingOrder?.id ?? null}
+          checkoutUrl={payingOrder?.checkoutUrl ?? ""}
+          onClose={() => setPayingOpen(false)}
+        />
       </main>
     </ConfigProvider>
   );
@@ -556,5 +572,153 @@ function OrderLookupSection(props: OrderLookupSectionProps): ReactElement {
         )}
       </Modal>
     </Card>
+  );
+}
+
+interface PaymentWatcherModalProps {
+  open: boolean;
+  orderId: string | null;
+  checkoutUrl: string;
+  onClose: () => void;
+}
+
+/**
+ * 下单后弹出「正在付款」弹窗:Stripe 付款页已在**新标签页**打开,
+ * 本弹窗随时可点「刷新情况」拉取订单最新状态(webhook 推进后实时反映);
+ * 也可重新打开付款页(如误关标签页)。状态到达终态(PAID/CANCELED/…)
+ * 后给出明确提示,并提供「关闭」。
+ */
+function PaymentWatcherModal(
+  props: PaymentWatcherModalProps,
+): ReactElement {
+  const { open, orderId, checkoutUrl, onClose } = props;
+  const [order, setOrder] = useState<OrderView | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (!orderId) return;
+    setLoading(true);
+    setError(null);
+    setNotice(null);
+    try {
+      setOrder(await getOrder(orderId));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "刷新失败(未到达后端)");
+    } finally {
+      setLoading(false);
+    }
+  }, [orderId]);
+
+  // 打开弹窗时先刷新一次;PENDING 时每 6 秒自动轮询,直到终态
+  useEffect(() => {
+    if (!open || !orderId) return;
+    void refresh();
+    const timer = setInterval(() => {
+      // 若已到终态则停止轮询(在回调里判断较麻烦,这里直接停,由下次 open 再启)
+      void refresh();
+    }, 6000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, orderId]);
+
+  const isTerminal =
+    order != null && order.status !== "PENDING";
+
+  return (
+    <Modal
+      title="正在付款…"
+      open={open}
+      onCancel={onClose}
+      footer={[
+        <Button
+          key="reopen"
+          onClick={() => checkoutUrl && window.open(checkoutUrl, "_blank", "noopener,noreferrer")}
+        >
+          重新打开付款页
+        </Button>,
+        <Button key="refresh" type="primary" loading={loading} onClick={() => void refresh()}>
+          刷新情况
+        </Button>,
+        <Button key="close" onClick={onClose}>
+          {isTerminal ? "完成" : "关闭"}
+        </Button>,
+      ]}
+    >
+      <Alert
+        type={isTerminal ? "success" : "info"}
+        showIcon
+        message={
+          order == null
+            ? "订单已创建,Stripe 付款页已在新标签页打开。"
+            : order.status === "PAID"
+              ? "支付成功!订单已确认。"
+              : order.status === "CANCELED"
+                ? "订单已取消(会话过期或主动取消)。"
+                : order.status === "FAILED"
+                  ? "支付失败(异步支付未完成)。"
+                  : "正在等待付款确认(webhook 推进后自动更新)…"
+        }
+        description={
+          order == null
+            ? "完成付款后回到本页,点击「刷新情况」即可看到最新状态;也可等待自动刷新。"
+            : `订单号 ${order.id} · 当前状态:${order.status}`
+        }
+        style={{ marginBottom: 12 }}
+      />
+      {notice ? (
+        <Alert
+          type="success"
+          showIcon
+          message={notice}
+          style={{ marginBottom: 12 }}
+        />
+      ) : null}
+      {error ? (
+        <Alert
+          type="error"
+          showIcon
+          message={error}
+          style={{ marginBottom: 12 }}
+        />
+      ) : null}
+      {order ? (
+        <Descriptions
+          size="small"
+          column={1}
+          items={[
+            {
+              key: "id",
+              label: "订单号",
+              children: (
+                <Typography.Text copyable style={{ fontFamily: "monospace" }}>
+                  {order.id}
+                </Typography.Text>
+              ),
+            },
+            {
+              key: "status",
+              label: "状态",
+              children: (
+                <Tag color={STATUS_COLORS[order.status] ?? "default"}>
+                  {order.status}
+                </Tag>
+              ),
+            },
+            {
+              key: "product",
+              label: "购买内容",
+              children: `${order.product_name} × ${order.quantity}`,
+            },
+            {
+              key: "total",
+              label: "金额",
+              children: formatPrice(order.total_price, order.currency),
+            },
+          ]}
+        />
+      ) : null}
+    </Modal>
   );
 }
