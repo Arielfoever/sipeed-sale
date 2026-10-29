@@ -15,11 +15,6 @@ import (
 // `stripe listen` 会打印 whsec_...)。
 var ErrWebhookNotConfigured = errors.New("payments: STRIPE_WEBHOOK_SECRET not configured")
 
-// WebhookEvent 是验签通过后事件的最小视图。不用 stripe.Event 是因为
-// stripe-cli 生成的测试事件里 `created` 是字符串,而 SDK 的
-// Event.Created 是 int64,直接用 ConstructEvent 会在解析阶段失败
-// (签名本身是通过的,纯粹是 SDK 结构体不兼容 CLI 的序列化格式)。
-//
 // Stripe 现在默认投递 thin event(`object: v2.core.event`),其中没有
 // `data.object`,只有 `related_object` 指针 {id,type,url};处理时必须按
 // 官方要求用 Stripe API 拉取关联对象的完整内容(见 FetchCheckoutSession)。
@@ -38,9 +33,7 @@ type RelatedObject struct {
 	URL  string `json:"url"`
 }
 
-// VerifyWebhook 使用官方 webhook 库验证签名(stripe-cli 转发的本地请求
-// 或线上终端投递均适用),但不解析 SDK 的 Event 结构,避免 CLI 测试事件
-// 的 `created` 字符串与 SDK int64 字段不兼容。
+// VerifyWebhook 使用官方 webhook 库验证签名
 func (c *Client) VerifyWebhook(payload []byte, sigHeader string) (WebhookEvent, error) {
 	if c.whSecret == "" {
 		return WebhookEvent{}, ErrWebhookNotConfigured
@@ -73,8 +66,7 @@ func (c *Client) VerifyWebhook(payload []byte, sigHeader string) (WebhookEvent, 
 }
 
 // CheckoutSession 是我们从 CheckoutSession 对象中实际需要的字段。
-// 故意用 string / json.RawMessage 而不是 SDK 的强类型,避免 stripe-cli
-// 测试事件(created 等字段为字符串)导致的解析失败。
+
 type CheckoutSession struct {
 	ID            string `json:"id"`
 	PaymentStatus string `json:"payment_status"`
@@ -130,9 +122,6 @@ func IsNotFound(err error) bool {
 	return false
 }
 
-// NormalizeEventType 把 Stripe 事件类型归一化为不带版本前缀的规范形式。
-// stripe-cli 转发的测试事件带 `v1.` 前缀(如 v1.checkout.session.completed),
-// 而 SDK 常量与真实投递是 `checkout.session.completed`;统一剥掉 `v<n>.` 前缀。
 func NormalizeEventType(evType string) string {
 	seg, _, ok := strings.Cut(evType, ".")
 	if !ok {

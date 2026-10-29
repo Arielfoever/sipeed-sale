@@ -243,6 +243,9 @@ curl -s -X POST localhost:8080/api/orders/<订单号>/cancel \
 
 **服务器部署**(前端由宿主机 nginx 托管、后端转发到 docker 内):
 
+> 📄 **完整上线步骤见 [`DEPLOY.md`](DEPLOY.md)**(含服务器 PostgreSQL 初始化、
+> `.env` 密钥、HTTPS/certbot、Stripe 生产 webhook、备份与升级流程)。
+
 ```bash
 cd frontend && npm run build          # dist/ → scp 到 /opt/sale-sipeed/dist
 cp nginx/sale-sipeed.conf /etc/nginx/conf.d/ && nginx -t && systemctl reload nginx

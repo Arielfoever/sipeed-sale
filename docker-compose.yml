@@ -1,15 +1,23 @@
-# 生产形态(数据库 + 后端容器):
-#   前端由宿主机 nginx 自行托管 frontend/dist(见 nginx/sale-sipeed.conf),
-#   nginx 把相同域名的 /api 原样反代到本容器的 8080(不改写 /api 前缀)。
+# 生产形态:
+#   前端由宿主机 nginx 自行托管 frontend/dist(见 nginx/sale-sipeed.conf / DEPLOY.md),
+#   nginx 把相同域名的 /api 原样反代到 backend 容器的 8080(不改写 /api 前缀)。
 #
-# 本地联调用的是 docker-compose.dev.yml(只有 PostgreSQL)。
+# 两种数据库用法:
+#   A. 复用服务器上的 PostgreSQL(推荐,见 DEPLOY.md):
+#        .env 里设 DATABASE_URL=postgres://user:pass@127.0.0.1:5432/sale_sipeed?sslmode=disable
+#        docker compose up -d --build            # 只起 backend
+#   B. PG 也跑容器(自带):
+#        docker compose --profile pg up -d --build
+#
+# 本地联调用的是 docker-compose.dev.yml(全栈 dev)。
 services:
   postgres:
     image: library/postgres:17
+    profiles: ["pg"]  # 仅 --profile pg 时启动(方案 B);方案 A 用服务器 PG
     restart: unless-stopped
     environment:
       POSTGRES_USER: sale_sipeed
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sale_sipeed}
       POSTGRES_DB: sale_sipeed
     volumes:
       - sale_sipeed_pgdata:/var/lib/postgresql/data
@@ -26,10 +34,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+        required: false  # 方案 A(服务器 PG)时 postgres 不启动,不报错
     environment:
       SERVER_PORT: 8080
-      DATABASE_URL: postgres://sale_sipeed:${POSTGRES_PASSWORD}@postgres:5432/sale_sipeed?sslmode=disable
-      MIGRATIONS_AUTO: "true"
+      # 默认指向容器内 postgres;方案 A 在 .env 覆盖为服务器 PG
+      DATABASE_URL: ${DATABASE_URL:-postgres://sale_sipeed:${POSTGRES_PASSWORD:-sale_sipeed}@postgres:5432/sale_sipeed?sslmode=disable}
+      MIGRATIONS_AUTO: ${MIGRATIONS_AUTO:-true}
       STRIPE_API_KEY: ${STRIPE_API_KEY:?set STRIPE_API_KEY}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:?set STRIPE_WEBHOOK_SECRET}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL (https://your-domain)}
