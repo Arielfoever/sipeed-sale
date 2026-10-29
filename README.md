@@ -219,8 +219,21 @@ curl -s -X POST localhost:8080/api/orders/<订单号>/refund \
 # 终态幂等:重复调用 → 409(仅 PAID 可退);Stripe 失败 → 502,本地仍 PAID
 ```
 
-前端(商品页上方「订单查询」卡片):粘贴订单号查询,`PAID` 订单可直接点
-「申请退款」,退款后视图即变为 `REFUNDED`。
+前端(商品页上方「订单查询」卡片):粘贴订单号查询,弹窗展示购买内容;
+`PAID` 订单可点「申请退款」,退款后弹窗状态变为 `REFUNDED`;`PENDING`
+订单可点「取消订单」(二次确认),取消后状态变为 `CANCELED` 并归还库存。
+
+**取消未付款订单**(仅 PENDING 可取消):
+
+```bash
+curl -s -X POST localhost:8080/api/orders/<订单号>/cancel \
+  -H "X-Request-Id: $(uuidgen | tr 'A-Z' 'a-z')" | jq
+# → {"id":"...","status":"CANCELED",...,"product_name":"...","quantity":1}
+# 幂等语义:非 PENDING → 409;订单不存在 → 404;
+# Cancel 流程:stripe ExpireCheckoutSession(已过期/已完成的按幂等成功处理,
+# 防止用户用旧链接继续付款)→ 本地事务条件更新 PENDING→CANCELED 并归还库存;
+# Stripe 会话作废失败 → 502,本地保持 PENDING 可重试。
+```
 
 **服务器部署**(前端由宿主机 nginx 托管、后端转发到 docker 内):
 

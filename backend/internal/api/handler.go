@@ -291,6 +291,68 @@ func (h *Handler) StripeWebhook(w http.ResponseWriter, r *http.Request, params g
 	writeJSON(w, http.StatusOK, map[string]bool{"received": true})
 }
 
+// CancelOrder POST /orders/{order_id}/cancel —— 取消未付款订单(仅 PENDING)。
+// 顺序:先让 Stripe Checkout Session 过期(防止用户用旧链接继续付款,失败
+// 视为网关错误 502),再本地事务条件推进 PENDING → CANCELED 并归还库存。
+// 幂等:非 PENDING 返回 409;订单不存在返回 404。
+func (h *Handler) CancelOrder(w http.ResponseWriter, r *http.Request, orderId types.UUID, params gen.CancelOrderParams) {
+	if params.XRequestId != nil {
+		w.Header().Set("X-Request-Id", params.XRequestId.String())
+	}
+
+	id := uuid.UUID(orderId)
+
+	// 先读取订单:仅有 session 的订单需要先在 Stripe 侧作废链接。
+	order, _, err := h.store.GetOrder(r.Context(), id)
+	if errors.Is(err, store.ErrOrderNotFound) {
+		writeError(w, http.StatusNotFound, "订单不存在")
+		return
+	}
+	if err != nil {
+		h.log.ErrorContext(r.Context(), "load order for cancel", "err", err)
+		writeError(w, http.StatusInternalServerError, "取消订单失败")
+		return
+	}
+	if order.Status != "PENDING" {
+		writeError(w, http.StatusConflict, "当前状态不可取消(仅待付款订单可取消)")
+		return
+	}
+
+	if order.StripeSessionID != nil && *order.StripeSessionID != "" {
+		if err := h.pays.ExpireCheckoutSession(r.Context(), *order.StripeSessionID); err != nil {
+			if errors.Is(err, payments.ErrNotConfigured) {
+				h.log.ErrorContext(r.Context(), "stripe not configured; cannot expire session")
+				writeError(w, http.StatusServiceUnavailable, "支付通道未配置(STRIPE_API_KEY)")
+				return
+			}
+			h.log.ErrorContext(r.Context(), "expire checkout session failed", "err", err, "session", *order.StripeSessionID)
+			writeError(w, http.StatusBadGateway, "Stripe 会话作废失败,请稍后重试")
+			return
+		}
+	}
+
+	affected, err := h.store.CancelOrder(r.Context(), id)
+	switch {
+	case errors.Is(err, store.ErrOrderNotFound):
+		writeError(w, http.StatusNotFound, "订单不存在")
+		return
+	case errors.Is(err, store.ErrNotCancelable):
+		writeError(w, http.StatusConflict, "当前状态不可取消(仅待付款订单可取消)")
+		return
+	case err != nil:
+		h.log.ErrorContext(r.Context(), "cancel order", "err", err)
+		writeError(w, http.StatusInternalServerError, "取消订单失败")
+		return
+	case affected == 1:
+		h.log.InfoContext(r.Context(), "order canceled", "order_id", id.String())
+	}
+
+	// 统一返回订单完整视图(含商品名)
+	if _, ok := h.replyOrderView(w, r, id); !ok {
+		return
+	}
+}
+
 // RefundOrder POST /orders/{order_id}/refund —— 全额退款(仅 PAID)。
 // 条件更新幂等:顺序为 锁单校验 → Stripe Refund → 本地 REFUNDED;
 // Stripe 失败返回 502,本地保持 PAID 可重试;Stripe 已成功但本地写库失败时,

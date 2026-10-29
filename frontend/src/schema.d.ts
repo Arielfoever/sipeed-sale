@@ -93,6 +93,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/orders/{order_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 取消未付款订单(仅 PENDING 可取消)
+         * @description 把 PENDING 订单推进为 CANCELED 并归还库存;若订单已创建 Checkout
+         *     Session,先调用 Stripe 会话过期,避免用户在旧链接继续付款。
+         *     条件更新幂等:重复调用命中 0 行则按当前状态给出 409/404。
+         */
+        post: operations["cancelOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/orders/{order_id}/refund": {
         parameters: {
             query?: never;
@@ -387,6 +409,59 @@ export interface operations {
             };
             /** @description 服务端错误 */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    cancelOrder: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 客户端随机生成的请求 ID(UUIDv7),用于幂等去重与链路追踪 */
+                "X-Request-Id"?: string;
+            };
+            path: {
+                /** @description 订单号(UUIDv7) */
+                order_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已取消(返回最新订单视图) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderView"];
+                };
+            };
+            /** @description 订单不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 当前状态不可取消(仅 PENDING 可取消) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Stripe 会话过期调用失败 */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

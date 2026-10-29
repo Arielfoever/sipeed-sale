@@ -20,6 +20,8 @@ var (
 	ErrNotRefundable = errors.New("order not refundable")
 	// ErrNoPaymentIntent 订单缺少 PaymentIntent(未收到支付回调,不可退)
 	ErrNoPaymentIntent = errors.New("order has no payment intent")
+	// ErrNotCancelable 订单当前状态不可取消(仅 PENDING 可取消)
+	ErrNotCancelable = errors.New("order not cancelable")
 )
 
 // Order 对应数据库 orders 表。
@@ -267,6 +269,66 @@ const orderColumnsSQL = `
 	       request_id, stripe_session_id, stripe_session_url,
 	       stripe_payment_intent_id, created_at, updated_at
 `
+
+// CancelOrder 取消未付款订单(PENDING → CANCELED)并归还库存:
+// 事务内行锁校验状态,只有 PENDING 才推进;重复调用命中 0 行时,
+// 由上层区分 ErrOrderNotFound / ErrNotCancelable 给出响应语义。
+func (s *Store) CancelOrder(ctx context.Context, orderID uuid.UUID) (int64, error) {
+	tx, err := s.pool.BeginTx(ctx, txDefaults())
+	if err != nil {
+		return 0, err
+	}
+	defer rollback(ctx, tx)
+
+	var status string
+	var productID uuid.UUID
+	var quantity int64
+	err = tx.QueryRow(ctx, `
+		SELECT status, product_id, quantity
+		FROM orders
+		WHERE id = $1
+		FOR UPDATE
+	`, orderID).Scan(&status, &productID, &quantity)
+	if isNoRows(err) {
+		return 0, ErrOrderNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
+	if status != "PENDING" {
+		return 0, ErrNotCancelable
+	}
+
+	// 归还库存(扣减来源同一商品表,行已锁定)
+	cmd, err := tx.Exec(ctx, `
+		UPDATE products
+		SET stock = stock + $2
+		WHERE id = $1
+	`, productID, quantity)
+	if err != nil {
+		return 0, err
+	}
+	if cmd.RowsAffected() != 1 {
+		return 0, ErrProductNotFound
+	}
+
+	cmd, err = tx.Exec(ctx, `
+		UPDATE orders
+		SET status = 'CANCELED', updated_at = now()
+		WHERE id = $1 AND status = 'PENDING'
+	`, orderID)
+	if err != nil {
+		return 0, err
+	}
+	if cmd.RowsAffected() != 1 {
+		return 0, ErrNotCancelable
+	}
+
+	if err := commit(ctx, tx); err != nil {
+		return 0, err
+	}
+	return 1, nil
+}
 
 func scanOrderRow(rows pgxRow) (Order, error) {
 	var o Order

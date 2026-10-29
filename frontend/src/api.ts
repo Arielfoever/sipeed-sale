@@ -119,3 +119,23 @@ export async function refundOrder(orderId: string): Promise<OrderView> {
   }
   return data;
 }
+
+/** 取消未付款订单(POST /orders/{order_id}/cancel;仅 PENDING 可取消,后端幂等) */
+export async function cancelOrder(orderId: string): Promise<OrderView> {
+  const requestId = newRequestId();
+  const { data, error, response } = await client.POST(
+    "/orders/{order_id}/cancel",
+    {
+      params: { path: { order_id: orderId } },
+      headers: { "X-Request-Id": requestId },
+    },
+  );
+  if (error) {
+    const detail = error as ErrorBody;
+    throw new ApiError(
+      detail?.error ?? `取消订单失败(HTTP ${response.status})`,
+      response.status,
+    );
+  }
+  return data;
+}

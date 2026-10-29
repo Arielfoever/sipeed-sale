@@ -195,6 +195,56 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /orders/{order_id}/cancel:
+    post:
+      operationId: cancelOrder
+      summary: 取消未付款订单(仅 PENDING 可取消)
+      description: |
+        把 PENDING 订单推进为 CANCELED 并归还库存;若订单已创建 Checkout
+        Session,先调用 Stripe 会话过期,避免用户在旧链接继续付款。
+        条件更新幂等:重复调用命中 0 行则按当前状态给出 409/404。
+      tags: [orders]
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          description: 订单号(UUIDv7)
+          schema:
+            type: string
+            format: uuid
+        - name: X-Request-Id
+          in: header
+          required: false
+          description: 客户端随机生成的请求 ID(UUIDv7),用于幂等去重与链路追踪
+          schema:
+            type: string
+            format: uuid
+            description: UUIDv7
+      responses:
+        "200":
+          description: 已取消(返回最新订单视图)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderView"
+        "404":
+          description: 订单不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 当前状态不可取消(仅 PENDING 可取消)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: Stripe 会话过期调用失败
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /orders/{order_id}/refund:
     post:
       operationId: refundOrder

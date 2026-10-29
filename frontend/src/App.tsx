@@ -10,13 +10,16 @@ import {
   Flex,
   Input,
   InputNumber,
+  Modal,
   Spin,
   Tag,
   Typography,
   theme,
 } from "antd";
 import zhCN from "antd/locale/zh_CN";
-import { ApiError, createOrder, fetchProducts, getOrder, refundOrder } from "./api";
+import {
+  ApiError, cancelOrder, createOrder, fetchProducts, getOrder, refundOrder
+} from "./api";
 import {
   formatPrice,
   type CreateOrderResponse,
@@ -352,36 +355,45 @@ interface OrderLookupSectionProps {
 }
 
 /**
- * 订单号查询区块:输入 UUIDv7 订单号 → 查询详情;
- * PAID 状态出示「申请退款」按钮(调用 /orders/{id}/refund,后端幂等),
- * 其他状态仅展示(退款规则见 README:仅 PAID 可退)。
+ * 订单号查询区块:输入 UUIDv7 订单号 → 查询成功后弹出 Modal 展示购买内容;
+ * Modal 内按状态出示操作按钮:
+ *   PAID    → 「申请退款」(调用 /orders/{id}/refund,后端幂等)
+ *   PENDING → 「取消订单」(调用 /orders/{id}/cancel,后端归还库存)
+ * 其他状态仅展示(操作规则见 README)。
  */
 function OrderLookupSection(props: OrderLookupSectionProps): ReactElement {
+  const [cancelModal, cancelModalHolder] = Modal.useModal();
   const [input, setInput] = useState(props.prefill);
   const [order, setOrder] = useState<OrderView | null>(null);
+  const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [refunding, setRefunding] = useState(false);
+  const [canceling, setCanceling] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (props.prefill !== input) {
       setInput(props.prefill);
     }
-    // 仅从回跳预填,不自动查询(避免 refresh 期反复请求)
+    // 仅从回跳预填,不自动查询(避免刷新期反复请求)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.prefill]);
 
   const handleLookup = useCallback(async () => {
     const id = input.trim();
     setError(null);
-    setOrder(null);
+    setNotice(null);
     if (!ORDER_ID_RE.test(id)) {
       setError("请输入合法订单号(UUIDv7 格式,32 位 hex + 4 个连字符)");
       return;
     }
     setLoading(true);
     try {
-      setOrder(await getOrder(id));
+      const view = await getOrder(id);
+      setOrder(view);
+      setOpen(true);
+      setNotice(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "查询失败(未到达后端)");
     } finally {
@@ -393,9 +405,11 @@ function OrderLookupSection(props: OrderLookupSectionProps): ReactElement {
     if (!order) return;
     setRefunding(true);
     setError(null);
+    setNotice(null);
     try {
-      // 后端返回退款后的最新视图(REFUNDED),直接刷新展示
+      // 后端返回退款后的最新视图(REFUNDED),直接刷新弹窗展示
       setOrder(await refundOrder(order.id));
+      setNotice("退款已受理,状态已更新为 REFUNDED。");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "退款请求未到达后端");
     } finally {
@@ -403,8 +417,33 @@ function OrderLookupSection(props: OrderLookupSectionProps): ReactElement {
     }
   }, [order]);
 
+  const handleCancel = useCallback(async () => {
+    if (!order) return;
+    cancelModal.confirm({
+      title: "确认取消该订单?",
+      content: `订单 ${order.id}(PENDING)取消后不可恢复,库存将归还商品。`,
+      okButtonProps: { danger: true },
+      okText: "取消订单",
+      cancelText: "返回",
+      onOk: async () => {
+        setCanceling(true);
+        setError(null);
+        setNotice(null);
+        try {
+          setOrder(await cancelOrder(order.id));
+          setNotice("订单已取消,状态更新为 CANCELED,库存已归还。");
+        } catch (err) {
+          setError(err instanceof ApiError ? err.message : "取消请求未到达后端");
+        } finally {
+          setCanceling(false);
+        }
+      },
+    });
+  }, [order]);
+
   return (
     <Card size="small" style={{ marginBottom: 24 }} title="订单查询">
+      {cancelModalHolder}
       <Flex gap="small" wrap="wrap">
         <Input
           style={{ maxWidth: 420, fontFamily: "monospace" }}
@@ -417,11 +456,6 @@ function OrderLookupSection(props: OrderLookupSectionProps): ReactElement {
         <Button type="primary" loading={loading} onClick={() => void handleLookup()}>
           查询
         </Button>
-        {order && order.status === "PAID" ? (
-          <Button danger loading={refunding} onClick={() => void handleRefund()}>
-            申请退款
-          </Button>
-        ) : null}
       </Flex>
 
       {error ? (
@@ -433,48 +467,94 @@ function OrderLookupSection(props: OrderLookupSectionProps): ReactElement {
         />
       ) : null}
 
-      {order ? (
-        <Descriptions
-          size="small"
-          column={{ xs: 1, sm: 2 }}
-          style={{ marginTop: 12 }}
-          items={[
-            {
-              key: "id",
-              label: "订单号",
-              children: (
-                <Typography.Text copyable style={{ fontFamily: "monospace" }}>
-                  {order.id}
-                </Typography.Text>
-              ),
-            },
-            {
-              key: "status",
-              label: "状态",
-              children: (
-                <Tag color={STATUS_COLORS[order.status] ?? "default"}>
-                  {order.status}
-                </Tag>
-              ),
-            },
-            {
-              key: "product",
-              label: "商品",
-              children: `${order.product_name} × ${order.quantity}`,
-            },
-            {
-              key: "total",
-              label: "金额",
-              children: formatPrice(order.total_price, order.currency),
-            },
-            {
-              key: "created",
-              label: "下单时间",
-              children: new Date(order.created_at).toLocaleString("zh-CN"),
-            },
-          ]}
-        />
-      ) : null}
+      <Modal
+        title="订单详情"
+        open={open}
+        onCancel={() => setOpen(false)}
+        footer={[
+          order && order.status === "PAID" ? (
+            <Button
+              key="refund"
+              danger
+              loading={refunding}
+              onClick={() => void handleRefund()}
+            >
+              申请退款
+            </Button>
+          ) : null,
+          order && order.status === "PENDING" ? (
+            <Button
+              key="cancel"
+              danger
+              loading={canceling}
+              onClick={() => void handleCancel()}
+            >
+              取消订单
+            </Button>
+          ) : null,
+          <Button key="close" type="primary" onClick={() => setOpen(false)}>
+            关闭
+          </Button>,
+        ]}
+      >
+        {notice ? (
+          <Alert
+            type="success"
+            showIcon
+            message={notice}
+            style={{ marginBottom: 12 }}
+          />
+        ) : null}
+        {error && open ? (
+          <Alert
+            type="error"
+            showIcon
+            message={error}
+            style={{ marginBottom: 12 }}
+          />
+        ) : null}
+        {order === null ? null : (
+          <Descriptions
+            size="small"
+            column={1}
+            items={[
+              {
+                key: "id",
+                label: "订单号",
+                children: (
+                  <Typography.Text copyable style={{ fontFamily: "monospace" }}>
+                    {order.id}
+                  </Typography.Text>
+                ),
+              },
+              {
+                key: "status",
+                label: "状态",
+                children: (
+                  <Tag color={STATUS_COLORS[order.status] ?? "default"}>
+                    {order.status}
+                  </Tag>
+                ),
+              },
+              {
+                key: "product",
+                label: "购买内容",
+                children: `${order.product_name} × ${order.quantity}`,
+              },
+              {
+                key: "total",
+                label: "金额",
+                children: formatPrice(order.total_price, order.currency),
+              },
+              {
+                key: "created",
+                label: "下单时间",
+                children: new Date(order.created_at).toLocaleString("zh-CN"),
+              },
+            ]}
+          />
+        )}
+      </Modal>
     </Card>
   );
 }
