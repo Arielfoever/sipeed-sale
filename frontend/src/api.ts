@@ -81,7 +81,12 @@ export async function createOrder(
       response.status,
     );
   }
-  // 类型层面收窄:2xx 时 data 必然存在(openapi-fetch 保证)
+  if (!data) {
+    throw new ApiError(
+      `下单失败(后端返回空响应) 请求 ID:${requestId}`,
+      (response as Response).status,
+    );
+  }
   return data;
 }
 
@@ -96,6 +101,10 @@ export async function getOrder(orderId: string): Promise<OrderView> {
       detail?.error ?? `查询订单失败(HTTP ${response.status})`,
       response.status,
     );
+  }
+  // 空 200(后端契约漂移)兜底:明确抛错而不是把 undefined 传出去
+  if (!data) {
+    throw new ApiError("查询订单失败(后端返回空响应)", (response as Response).status);
   }
   return data;
 }
@@ -117,6 +126,9 @@ export async function refundOrder(orderId: string): Promise<OrderView> {
       response.status,
     );
   }
+  if (!data) {
+    throw new ApiError("退款失败(后端返回空响应)", (response as Response).status);
+  }
   return data;
 }
 
@@ -136,6 +148,9 @@ export async function cancelOrder(orderId: string): Promise<OrderView> {
       detail?.error ?? `取消订单失败(HTTP ${response.status})`,
       response.status,
     );
+  }
+  if (!data) {
+    throw new ApiError("取消订单失败(后端返回空响应)", (response as Response).status);
   }
   return data;
 }

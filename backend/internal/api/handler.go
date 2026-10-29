@@ -189,6 +189,8 @@ func (h *Handler) replyOrderView(w http.ResponseWriter, r *http.Request, id uuid
 		return gen.OrderView{}, false
 	}
 	view := toOrderView(order, productName)
+	// 统一在此写出 200 响应体(调用方不再各自写,避免遗漏)
+	writeJSON(w, http.StatusOK, &view)
 	return view, true
 }
 
