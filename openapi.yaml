@@ -152,6 +152,49 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /orders/{order_id}:
+    get:
+      operationId: getOrder
+      summary: 订单号查询订单(支付结果核对 / 退款前确认)
+      description: |
+        按订单号(UUIDv7)查询订单详情。订单状态由后端数据库读取,是
+        webhook 回调后用户自查的入口;查询到 PAID 订单后可调用退款端点。
+      tags: [orders]
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          description: 订单号(UUIDv7)
+          schema:
+            type: string
+            format: uuid
+        - name: X-Request-Id
+          in: header
+          required: false
+          description: 客户端随机生成的请求 ID(UUIDv7),用于幂等去重与链路追踪
+          schema:
+            type: string
+            format: uuid
+            description: UUIDv7
+      responses:
+        "200":
+          description: 订单详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderView"
+        "404":
+          description: 订单不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: 服务端错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /orders/{order_id}/refund:
     post:
       operationId: refundOrder
@@ -214,8 +257,8 @@ components:
   schemas:
     OrderView:
       type: object
-      description: 订单的对外可见视图(退款端点等仅需要读取时)
-      required: [id, status, total_price, currency]
+      description: 订单的对外可见视图(按订单号查询、退款端点返回值)
+      required: [id, status, total_price, currency, product_name, quantity, created_at]
       properties:
         id:
           type: string
@@ -232,6 +275,17 @@ components:
           type: string
           minLength: 3
           maxLength: 3
+        product_name:
+          type: string
+          description: 商品名称(下单时快照来自商品表)
+        quantity:
+          type: integer
+          format: int64
+          description: 购买数量
+        created_at:
+          type: string
+          format: date-time
+          description: 订单创建时间(RFC3339)
     Product:
       type: object
       required: [id, name, description, price, currency, stock]

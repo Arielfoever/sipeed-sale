@@ -18,6 +18,9 @@ export type CreateOrderPayload = components["schemas"]["CreateOrderPayload"];
 export type CreateOrderResponse =
   components["schemas"]["CreateOrderResponse"];
 
+/** 订单视图(按订单号查询 / 退款端点返回) */
+export type OrderView = components["schemas"]["OrderView"];
+
 /** 把最小货币单位整数格式化为展示文本,例如 219900 -> "¥2,199.00"(CNY) */
 export function formatPrice(price: number, currency: string): string {
   try {

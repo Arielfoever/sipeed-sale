@@ -222,15 +222,27 @@ func (s *Store) MarkOrderRefunded(ctx context.Context, orderID uuid.UUID) (int64
 	return cmd.RowsAffected(), nil
 }
 
-// GetOrder 读取订单(按 ID)。
-func (s *Store) GetOrder(ctx context.Context, id uuid.UUID) (Order, error) {
-	o, err := scanOrderRow(
-		s.pool.QueryRow(ctx, orderColumnsSQL+` FROM orders WHERE id = $1`, id),
+// GetOrder 读取订单详情(JOIN 商品表取产品名称;退款 / 查询用)。
+func (s *Store) GetOrder(ctx context.Context, id uuid.UUID) (order Order, productName string, err error) {
+	err = s.pool.QueryRow(ctx, `
+		SELECT o.id, o.product_id, o.quantity, o.unit_price, o.total_price,
+		       o.currency, o.status, o.request_id, o.stripe_session_id,
+		       o.stripe_session_url, o.stripe_payment_intent_id,
+		       o.created_at, o.updated_at, p.name
+		FROM orders o
+		JOIN products p ON p.id = o.product_id
+		WHERE o.id = $1
+	`, id).Scan(
+		&order.ID, &order.ProductID, &order.Quantity, &order.UnitPrice,
+		&order.TotalPrice, &order.Currency, &order.Status, &order.RequestID,
+		&order.StripeSessionID, &order.StripeSessionURL,
+		&order.StripePaymentIntentID, &order.CreatedAt, &order.UpdatedAt,
+		&productName,
 	)
-	if isNoRows(err) {
-		return Order{}, ErrOrderNotFound
+	if err != nil {
+		return Order{}, "", err
 	}
-	return o, err
+	return order, productName, nil
 }
 
 func (s *Store) getOrderByRequestID(

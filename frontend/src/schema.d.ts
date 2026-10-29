@@ -72,6 +72,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/orders/{order_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 订单号查询订单(支付结果核对 / 退款前确认)
+         * @description 按订单号(UUIDv7)查询订单详情。订单状态由后端数据库读取,是
+         *     webhook 回调后用户自查的入口;查询到 PAID 订单后可调用退款端点。
+         */
+        get: operations["getOrder"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/orders/{order_id}/refund": {
         parameters: {
             query?: never;
@@ -100,7 +121,7 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description 订单的对外可见视图(退款端点等仅需要读取时) */
+        /** @description 订单的对外可见视图(按订单号查询、退款端点返回值) */
         OrderView: {
             /**
              * Format: uuid
@@ -115,6 +136,18 @@ export interface components {
              */
             total_price: number;
             currency: string;
+            /** @description 商品名称(下单时快照来自商品表) */
+            product_name: string;
+            /**
+             * Format: int64
+             * @description 购买数量
+             */
+            quantity: number;
+            /**
+             * Format: date-time
+             * @description 订单创建时间(RFC3339)
+             */
+            created_at: string;
         };
         Product: {
             /**
@@ -301,6 +334,50 @@ export interface operations {
             };
             /** @description 非本系统事件类型(忽略)或原始体为空 */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 服务端错误 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getOrder: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 客户端随机生成的请求 ID(UUIDv7),用于幂等去重与链路追踪 */
+                "X-Request-Id"?: string;
+            };
+            path: {
+                /** @description 订单号(UUIDv7) */
+                order_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 订单详情 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderView"];
+                };
+            };
+            /** @description 订单不存在 */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -14,7 +14,7 @@
 import createClient from "openapi-fetch";
 import { v7 as uuidV7 } from "uuid";
 import type { paths } from "./schema";
-import type { CreateOrderResponse, Product } from "./types";
+import type { CreateOrderResponse, OrderView, Product } from "./types";
 
 type ApiClient = ReturnType<typeof createClient<paths>>;
 
@@ -74,7 +74,7 @@ export async function createOrder(
     const detail = error as ErrorBody;
     const message =
       response.status === 404
-        ? "后端尚未提供 /api/orders(404):此为第 1 步的预期 placeholder。"
+        ? "商品不存在"
         : describe(response.status, detail);
     throw new ApiError(
       `${message} 请求 ID:${requestId}`,
@@ -82,5 +82,40 @@ export async function createOrder(
     );
   }
   // 类型层面收窄:2xx 时 data 必然存在(openapi-fetch 保证)
+  return data;
+}
+
+/** 按订单号查询订单(GET /orders/{order_id};webhook 确认后自查入口) */
+export async function getOrder(orderId: string): Promise<OrderView> {
+  const { data, error, response } = await client.GET("/orders/{order_id}", {
+    params: { path: { order_id: orderId } },
+  });
+  if (error) {
+    const detail = error as ErrorBody;
+    throw new ApiError(
+      detail?.error ?? `查询订单失败(HTTP ${response.status})`,
+      response.status,
+    );
+  }
+  return data;
+}
+
+/** 申请全额退款(POST /orders/{order_id}/refund;仅 PAID 可退,后端幂等) */
+export async function refundOrder(orderId: string): Promise<OrderView> {
+  const requestId = newRequestId();
+  const { data, error, response } = await client.POST(
+    "/orders/{order_id}/refund",
+    {
+      params: { path: { order_id: orderId } },
+      headers: { "X-Request-Id": requestId },
+    },
+  );
+  if (error) {
+    const detail = error as ErrorBody;
+    throw new ApiError(
+      detail?.error ?? `退款失败(HTTP ${response.status})`,
+      response.status,
+    );
+  }
   return data;
 }

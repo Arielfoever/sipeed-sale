@@ -5,8 +5,10 @@ import {
   Button,
   Card,
   ConfigProvider,
+  Descriptions,
   Empty,
   Flex,
+  Input,
   InputNumber,
   Spin,
   Tag,
@@ -14,8 +16,26 @@ import {
   theme,
 } from "antd";
 import zhCN from "antd/locale/zh_CN";
-import { ApiError, createOrder, fetchProducts } from "./api";
-import { formatPrice, type CreateOrderResponse, type Product } from "./types";
+import { ApiError, createOrder, fetchProducts, getOrder, refundOrder } from "./api";
+import {
+  formatPrice,
+  type CreateOrderResponse,
+  type OrderView,
+  type Product,
+} from "./types";
+
+/** UUIDv7 订单号格式校验(查询入口的简单防护,后端仍做权威校验) */
+const ORDER_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** 订单状态 → antd Tag 颜色 */
+const STATUS_COLORS: Record<string, string> = {
+  PENDING: "gold",
+  PAID: "green",
+  FAILED: "red",
+  CANCELED: "default",
+  REFUNDED: "purple",
+};
 
 type LoadState =
   | { phase: "loading" }
@@ -58,6 +78,16 @@ export function App(): ReactElement {
     }
     return null;
   });
+
+  // 回跳携带的订单号预填到「订单查询」输入框
+  const [lookupPrefill, setLookupPreFill] = useState<string>("");
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const orderId = params.get("order_id");
+    if (orderId) {
+      setLookupPreFill(orderId);
+    }
+  }, []);
 
   // 清理回跳参数,避免刷新时重复提示
   useEffect(() => {
@@ -218,6 +248,7 @@ export function App(): ReactElement {
             style={{ marginBottom: 16 }}
           />
         ) : null}
+        <OrderLookupSection prefill={lookupPrefill} />
         {body}
       </main>
     </ConfigProvider>
@@ -314,3 +345,136 @@ function ProductCard(props: ProductCardProps): ReactElement {
 }
 
 export default App;
+
+interface OrderLookupSectionProps {
+  /** Stripe 回跳携带的订单号(预填输入框) */
+  prefill: string;
+}
+
+/**
+ * 订单号查询区块:输入 UUIDv7 订单号 → 查询详情;
+ * PAID 状态出示「申请退款」按钮(调用 /orders/{id}/refund,后端幂等),
+ * 其他状态仅展示(退款规则见 README:仅 PAID 可退)。
+ */
+function OrderLookupSection(props: OrderLookupSectionProps): ReactElement {
+  const [input, setInput] = useState(props.prefill);
+  const [order, setOrder] = useState<OrderView | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [refunding, setRefunding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (props.prefill !== input) {
+      setInput(props.prefill);
+    }
+    // 仅从回跳预填,不自动查询(避免 refresh 期反复请求)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.prefill]);
+
+  const handleLookup = useCallback(async () => {
+    const id = input.trim();
+    setError(null);
+    setOrder(null);
+    if (!ORDER_ID_RE.test(id)) {
+      setError("请输入合法订单号(UUIDv7 格式,32 位 hex + 4 个连字符)");
+      return;
+    }
+    setLoading(true);
+    try {
+      setOrder(await getOrder(id));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "查询失败(未到达后端)");
+    } finally {
+      setLoading(false);
+    }
+  }, [input]);
+
+  const handleRefund = useCallback(async () => {
+    if (!order) return;
+    setRefunding(true);
+    setError(null);
+    try {
+      // 后端返回退款后的最新视图(REFUNDED),直接刷新展示
+      setOrder(await refundOrder(order.id));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "退款请求未到达后端");
+    } finally {
+      setRefunding(false);
+    }
+  }, [order]);
+
+  return (
+    <Card size="small" style={{ marginBottom: 24 }} title="订单查询">
+      <Flex gap="small" wrap="wrap">
+        <Input
+          style={{ maxWidth: 420, fontFamily: "monospace" }}
+          placeholder="粘贴订单号(UUIDv7),例如 01a1…-…"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onPressEnter={() => void handleLookup()}
+          allowClear
+        />
+        <Button type="primary" loading={loading} onClick={() => void handleLookup()}>
+          查询
+        </Button>
+        {order && order.status === "PAID" ? (
+          <Button danger loading={refunding} onClick={() => void handleRefund()}>
+            申请退款
+          </Button>
+        ) : null}
+      </Flex>
+
+      {error ? (
+        <Alert
+          type="error"
+          showIcon
+          message={error}
+          style={{ marginTop: 12 }}
+        />
+      ) : null}
+
+      {order ? (
+        <Descriptions
+          size="small"
+          column={{ xs: 1, sm: 2 }}
+          style={{ marginTop: 12 }}
+          items={[
+            {
+              key: "id",
+              label: "订单号",
+              children: (
+                <Typography.Text copyable style={{ fontFamily: "monospace" }}>
+                  {order.id}
+                </Typography.Text>
+              ),
+            },
+            {
+              key: "status",
+              label: "状态",
+              children: (
+                <Tag color={STATUS_COLORS[order.status] ?? "default"}>
+                  {order.status}
+                </Tag>
+              ),
+            },
+            {
+              key: "product",
+              label: "商品",
+              children: `${order.product_name} × ${order.quantity}`,
+            },
+            {
+              key: "total",
+              label: "金额",
+              children: formatPrice(order.total_price, order.currency),
+            },
+            {
+              key: "created",
+              label: "下单时间",
+              children: new Date(order.created_at).toLocaleString("zh-CN"),
+            },
+          ]}
+        />
+      ) : null}
+    </Card>
+  );
+}

@@ -162,6 +162,52 @@ func toGenCreateOrderResponse(o store.Order) gen.CreateOrderResponse {
 	}
 }
 
+// GetOrder GET /orders/{order_id} —— 订单号查询(支付核对 / 退款前确认)。
+func (h *Handler) GetOrder(w http.ResponseWriter, r *http.Request, orderId types.UUID, params gen.GetOrderParams) {
+	// 回显请求 ID,便于联调排查
+	if params.XRequestId != nil {
+		w.Header().Set("X-Request-Id", params.XRequestId.String())
+	}
+	id := uuid.UUID(orderId)
+	// replyOrderView 已处理 200/404/500
+	if _, ok := h.replyOrderView(w, r, id); !ok {
+		return
+	}
+}
+
+// replyOrderView 加载订单并写回 OrderView(JSON);内部已处理 404/500。
+// 供 GET /orders/{id} 与退款成功响应共用。
+func (h *Handler) replyOrderView(w http.ResponseWriter, r *http.Request, id uuid.UUID) (gen.OrderView, bool) {
+	order, productName, err := h.store.GetOrder(r.Context(), id)
+	if isNotFoundStoreErr(err) {
+		writeError(w, http.StatusNotFound, "订单不存在")
+		return gen.OrderView{}, false
+	}
+	if err != nil {
+		h.log.ErrorContext(r.Context(), "get order", "err", err)
+		writeError(w, http.StatusInternalServerError, "查询订单失败")
+		return gen.OrderView{}, false
+	}
+	view := toOrderView(order, productName)
+	return view, true
+}
+
+func isNotFoundStoreErr(err error) bool {
+	return errors.Is(err, store.ErrOrderNotFound)
+}
+
+func toOrderView(o store.Order, productName string) gen.OrderView {
+	return gen.OrderView{
+		Id:          types.UUID(o.ID),
+		Status:      o.Status,
+		TotalPrice:  o.TotalPrice,
+		Currency:    o.Currency,
+		ProductName: productName,
+		Quantity:    o.Quantity,
+		CreatedAt:   o.CreatedAt,
+	}
+}
+
 // writeJSON 通用 JSON 应答。
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -285,16 +331,8 @@ func (h *Handler) RefundOrder(w http.ResponseWriter, r *http.Request, orderId ty
 		return
 	}
 
-	order, err := h.store.GetOrder(r.Context(), id)
-	if err != nil {
-		h.log.ErrorContext(r.Context(), "load refunded order", "err", err)
-		writeError(w, http.StatusInternalServerError, "退款成功但状态查询失败")
+	// 统一返回订单完整视图(含商品名)
+	if _, ok := h.replyOrderView(w, r, id); !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, &gen.OrderView{
-		Id:         types.UUID(order.ID),
-		Status:     order.Status,
-		TotalPrice: order.TotalPrice,
-		Currency:   order.Currency,
-	})
 }

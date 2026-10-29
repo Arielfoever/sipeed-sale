@@ -8,6 +8,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/oapi-codegen/runtime"
 	openapi_types "github.com/oapi-codegen/runtime/types"
@@ -44,12 +45,20 @@ type Error struct {
 	Error string `json:"error"`
 }
 
-// OrderView 订单的对外可见视图(退款端点等仅需要读取时)
+// OrderView 订单的对外可见视图(按订单号查询、退款端点返回值)
 type OrderView struct {
-	Currency string `json:"currency"`
+	// CreatedAt 订单创建时间(RFC3339)
+	CreatedAt time.Time `json:"created_at"`
+	Currency  string    `json:"currency"`
 
 	// Id 订单号(UUIDv7)
 	Id openapi_types.UUID `json:"id"`
+
+	// ProductName 商品名称(下单时快照来自商品表)
+	ProductName string `json:"product_name"`
+
+	// Quantity 购买数量
+	Quantity int64 `json:"quantity"`
 
 	// Status 订单状态(PENDING/PAID/FAILED/CANCELED/REFUNDED)
 	Status string `json:"status"`
@@ -84,6 +93,12 @@ type CreateOrderParams struct {
 	XRequestId *openapi_types.UUID `json:"X-Request-Id,omitempty"`
 }
 
+// GetOrderParams defines parameters for GetOrder.
+type GetOrderParams struct {
+	// XRequestId 客户端随机生成的请求 ID(UUIDv7),用于幂等去重与链路追踪
+	XRequestId *openapi_types.UUID `json:"X-Request-Id,omitempty"`
+}
+
 // RefundOrderParams defines parameters for RefundOrder.
 type RefundOrderParams struct {
 	// XRequestId 客户端随机生成的请求 ID(UUIDv7),用于幂等去重与链路追踪
@@ -104,6 +119,9 @@ type ServerInterface interface {
 	// 创建预售订单
 	// (POST /orders)
 	CreateOrder(w http.ResponseWriter, r *http.Request, params CreateOrderParams)
+	// 订单号查询订单(支付结果核对 / 退款前确认)
+	// (GET /orders/{order_id})
+	GetOrder(w http.ResponseWriter, r *http.Request, orderId openapi_types.UUID, params GetOrderParams)
 	// 退款订单(仅 PAID 可退)
 	// (POST /orders/{order_id}/refund)
 	RefundOrder(w http.ResponseWriter, r *http.Request, orderId openapi_types.UUID, params RefundOrderParams)
@@ -155,6 +173,55 @@ func (siw *ServerInterfaceWrapper) CreateOrder(w http.ResponseWriter, r *http.Re
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CreateOrder(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetOrder operation middleware
+func (siw *ServerInterfaceWrapper) GetOrder(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "order_id" -------------
+	var orderId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "order_id", r.PathValue("order_id"), &orderId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "order_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetOrderParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "X-Request-Id" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Request-Id")]; found {
+		var XRequestId openapi_types.UUID
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Request-Id", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", valueList[0], &XRequestId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Request-Id", Err: err})
+			return
+		}
+
+		params.XRequestId = &XRequestId
+
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetOrder(w, r, orderId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -392,6 +459,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	}
 
 	m.HandleFunc("POST "+options.BaseURL+"/orders", wrapper.CreateOrder)
+	m.HandleFunc("GET "+options.BaseURL+"/orders/{order_id}", wrapper.GetOrder)
 	m.HandleFunc("POST "+options.BaseURL+"/orders/{order_id}/refund", wrapper.RefundOrder)
 	m.HandleFunc("GET "+options.BaseURL+"/products", wrapper.ListProducts)
 	m.HandleFunc("POST "+options.BaseURL+"/webhooks/stripe", wrapper.StripeWebhook)

@@ -207,11 +207,20 @@ stripe trigger checkout.session.completed
 **退款**(示例接口未内置管理员鉴权,生产须在网关或加 JWT 后使用):
 
 ```bash
+# 1) 订单号查询(支付结果核对 / 退款前确认)
+curl -s localhost:8080/api/orders/<订单号> -H "X-Request-Id: $(uuidgen | tr 'A-Z' 'a-z')" | jq
+# → {"id":"...","status":"PAID","total_price":...,"currency":"CNY",
+#    "product_name":"LicheeRV Nano","quantity":1,"created_at":"..."}
+
+# 2) 对 PAID 订单申请全额退款
 curl -s -X POST localhost:8080/api/orders/<订单号>/refund \
   -H "X-Request-Id: $(uuidgen | tr 'A-Z' 'a-z')" | jq
-# → {"id":"...","status":"REFUNDED","total_price":...,"currency":"CNY"}
+# → {"id":"...","status":"REFUNDED",...}
 # 终态幂等:重复调用 → 409(仅 PAID 可退);Stripe 失败 → 502,本地仍 PAID
 ```
+
+前端(商品页上方「订单查询」卡片):粘贴订单号查询,`PAID` 订单可直接点
+「申请退款」,退款后视图即变为 `REFUNDED`。
 
 **服务器部署**(前端由宿主机 nginx 托管、后端转发到 docker 内):
 
